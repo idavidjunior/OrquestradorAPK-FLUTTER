@@ -252,71 +252,123 @@ import 'package:flutter/material.dart';
             with urlopen(req, timeout=30) as r:
                 return json.loads(r.read())
 
-        # ── Empacota projeto em zip base64 ──────────
-        def _zip_project(self, project_path: Path) -> str:
-            self.log("📦 Empacotando projeto para envio...", "info")
+        # ── Faz upload do zip como Release Asset ─────
+        def _upload_project(self, project_path: Path, session_id: str) -> str:
+            """Cria uma release temporária e sobe o zip. Retorna a URL de download."""
+            self.log("☁️ Fazendo upload do projeto para GitHub...", "info")
+
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 for f in project_path.rglob("*"):
-                    # Ignora build/, .dart_tool/, .git/
                     parts = f.parts
                     if any(p in ("build", ".dart_tool", ".git", ".idea") for p in parts):
                         continue
                     if f.is_file():
                         zf.write(f, f.relative_to(project_path))
-            size_kb = buf.tell() // 1024
-            self.log(f"📦 Zip: {size_kb} KB", "info")
-            buf.seek(0)
-            import base64
-            return base64.b64encode(buf.read()).decode()
+            zip_bytes = buf.getvalue()
+            size_kb = len(zip_bytes) // 1024
+            self.log(f"📦 Zip gerado: {size_kb} KB", "info")
+
+            # Cria release temporária
+            tag = f"ci-tmp-{session_id}"
+            try:
+                release = self._api("POST", f"/repos/{self.CI_REPO}/releases", {
+                    "tag_name": tag,
+                    "name": f"CI Build {session_id}",
+                    "body": "Release temporária para build CI. Será deletada automaticamente.",
+                    "draft": False,
+                    "prerelease": True,
+                })
+                upload_url = release["upload_url"].split("{")[0]
+                release_id = release["id"]
+            except Exception as e:
+                raise Exception(f"Falha ao criar release temporária: {e}")
+
+            # Faz upload do zip
+            asset_name = f"project_{session_id}.zip"
+            upload_req = Request(
+                f"{upload_url}?name={asset_name}",
+                data=zip_bytes,
+                headers={
+                    **self._headers,
+                    "Content-Type": "application/zip",
+                    "Content-Length": str(len(zip_bytes)),
+                },
+                method="POST"
+            )
+            with urlopen(upload_req, timeout=120) as r:
+                asset = json.loads(r.read())
+
+            download_url = asset["browser_download_url"]
+            self.log(f"✅ Upload concluído: {asset_name}", "success")
+            self._tmp_release_id = release_id  # guarda para limpeza
+            return download_url
+
+        # ── Limpa release temporária ─────────────────
+        def _cleanup_release(self):
+            if hasattr(self, "_tmp_release_id"):
+                try:
+                    self._api("DELETE", f"/repos/{self.CI_REPO}/releases/{self._tmp_release_id}")
+                    self.log("🗑️ Release temporária removida.", "info")
+                except Exception:
+                    pass
 
         # ── Dispara workflow ─────────────────────────
-        def dispatch(self, project_path: Path, build_type: str, session_id: str) -> bool:
-            b64 = self._zip_project(project_path)
-            self.log("🚀 Despachando build para GitHub Actions...", "info")
-            self.status("Enviando para GitHub Actions...")
+        def dispatch(self, project_path: Path, build_type: str, session_id: str) -> float:
+            """Faz upload do projeto, dispara o workflow. Retorna o timestamp do dispatch ou 0."""
             try:
+                zip_url = self._upload_project(project_path, session_id)
+                self.log("🚀 Despachando build para GitHub Actions...", "info")
+                self.status("Enviando para GitHub Actions...")
+                dispatch_time = time.time()
                 self._api("POST",
                     f"/repos/{self.CI_REPO}/actions/workflows/{self.WORKFLOW}/dispatches",
                     {
                         "ref": "main",
                         "inputs": {
-                            "project_zip_b64": b64,
+                            "project_zip_url": zip_url,
+                            "project_zip_b64": "",
                             "build_type": build_type,
                             "session_id": session_id,
                         }
                     }
                 )
                 self.log("✅ Workflow disparado.", "success")
-                return True
+                return dispatch_time
             except Exception as e:
                 self.log(f"❌ Falha ao disparar workflow: {e}", "error")
-                return False
+                return 0
 
         # ── Encontra o run recém-criado ──────────────
-        def _find_run(self, session_id: str, max_wait=60) -> dict | None:
+        def _find_run(self, dispatch_time: float, max_wait=90) -> dict | None:
             self.log("🔍 Aguardando run do workflow...", "info")
             deadline = time.time() + max_wait
             while time.time() < deadline:
                 try:
                     data = self._api("GET",
-                        f"/repos/{self.CI_REPO}/actions/runs?per_page=5")
+                        f"/repos/{self.CI_REPO}/actions/workflows/{self.WORKFLOW}/runs?per_page=5")
                     for run in data.get("workflow_runs", []):
-                        # Identifica pelo session_id no nome ou nas inputs
-                        if session_id in (run.get("name") or "") or \
-                           run.get("status") in ("queued", "in_progress"):
+                        # Aceita runs criados após o dispatch (margem de 30s)
+                        created = run.get("created_at", "")
+                        import datetime as _dt
+                        try:
+                            created_ts = _dt.datetime.fromisoformat(
+                                created.replace("Z", "+00:00")).timestamp()
+                        except Exception:
+                            created_ts = 0
+                        if created_ts >= dispatch_time - 30:
                             return run
                 except Exception:
                     pass
-                time.sleep(4)
+                time.sleep(5)
             return None
 
         # ── Monitora até concluir ────────────────────
-        def monitor(self, session_id: str, timeout=1200) -> dict | None:
+        def monitor(self, dispatch_time: float, timeout=1200) -> dict | None:
             """Monitora o workflow e retorna o run quando terminar."""
-            run = self._find_run(session_id)
+            run = self._find_run(dispatch_time)
             if not run:
-                self.log("❌ Run não encontrado.", "error")
+                self.log("❌ Run não encontrado após dispatch.", "error")
                 return None
 
             run_id = run["id"]
@@ -392,13 +444,17 @@ import 'package:flutter/material.dart';
         # ── Pipeline completo ────────────────────────
         def run_pipeline(self, project_path: Path, build_type: str) -> Path | None:
             session_id = datetime.now().strftime("%Y%m%d%H%M%S")
-            if not self.dispatch(project_path, build_type, session_id):
+            dispatch_time = self.dispatch(project_path, build_type, session_id)
+            if not dispatch_time:
                 return None
-            run = self.monitor(session_id)
-            if not run:
-                return None
-            dest = project_path.parent / "ci_outputs"
-            return self.download_apk(run, session_id, dest)
+            try:
+                run = self.monitor(dispatch_time)
+                if not run:
+                    return None
+                dest = project_path.parent / "ci_outputs"
+                return self.download_apk(run, session_id, dest)
+            finally:
+                self._cleanup_release()
 
     # ─────────────────────────────────────────────
     #  Main GUI
