@@ -2,22 +2,18 @@
 # -*- coding: utf-8 -*-
 """
 Flutter Build Orchestrator - Interface Gráfica
-Uma interface moderna para orquestrar builds de aplicativos Flutter.
+Suporta três fontes de entrada: código colado, pasta local e link GitHub.
+Inclui integração ADB para instalação direta no dispositivo.
 """
 
 import sys
 import os
 
-# Verificar se há suporte a GUI antes de importar tkinter
 def check_gui_support():
-    """Verifica se há suporte para interface gráfica"""
-    # Verificar variável DISPLAY (Linux/Mac)
     if os.name == 'posix' and not os.environ.get('DISPLAY'):
         return False
-    
     try:
         import tkinter
-        # Tentar criar uma janela invisível para testar
         root = tkinter.Tk()
         root.withdraw()
         root.destroy()
@@ -34,468 +30,573 @@ if HAS_GUI_SUPPORT:
     import threading
     import subprocess
     import platform
+    import shutil
+    import tempfile
+    import re
     from datetime import datetime
+    from pathlib import Path
 
-    # Configuração inicial do tema (apenas se GUI disponível)
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")
 
+    # ─────────────────────────────────────────────
+    #  ADB Helper
+    # ─────────────────────────────────────────────
+    class ADBHelper:
+        @staticmethod
+        def find_adb():
+            """Retorna o caminho do adb ou None."""
+            if shutil.which("adb"):
+                return "adb"
+            candidates = [
+                os.path.expanduser("~/Android/Sdk/platform-tools/adb"),
+                os.path.expanduser("~\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe"),
+                "/usr/local/bin/adb",
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    return c
+            return None
+
+        @staticmethod
+        def list_devices(adb_path):
+            """Retorna lista de (serial, descrição) dos dispositivos conectados."""
+            try:
+                result = subprocess.run(
+                    [adb_path, "devices", "-l"],
+                    capture_output=True, text=True, timeout=10
+                )
+                devices = []
+                for line in result.stdout.splitlines()[1:]:
+                    line = line.strip()
+                    if not line or "offline" in line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1] == "device":
+                        serial = parts[0]
+                        model = next((p.split(":")[1] for p in parts if p.startswith("model:")), serial)
+                        devices.append((serial, model))
+                return devices
+            except Exception:
+                return []
+
+        @staticmethod
+        def install_apk(adb_path, serial, apk_path, log_cb):
+            """Instala APK no dispositivo. Retorna True se sucesso."""
+            try:
+                cmd = [adb_path, "-s", serial, "install", "-r", str(apk_path)]
+                log_cb(f"📲 Instalando via ADB: {apk_path}", "info")
+                process = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True
+                )
+                for line in process.stdout:
+                    line = line.strip()
+                    if line:
+                        log_cb(line, "info")
+                process.wait()
+                if process.returncode == 0:
+                    log_cb("✅ APK instalado com sucesso no dispositivo!", "success")
+                    return True
+                else:
+                    log_cb("❌ Falha na instalação via ADB.", "error")
+                    return False
+            except Exception as e:
+                log_cb(f"❌ Erro ADB: {e}", "error")
+                return False
+
+    # ─────────────────────────────────────────────
+    #  Project Source Manager
+    # ─────────────────────────────────────────────
+    class ProjectSourceManager:
+        """Prepara o projeto Flutter a partir de qualquer fonte de entrada."""
+
+        PUBSPEC_TEMPLATE = """\
+name: flutter_app_generated
+description: App gerado pelo Flutter Build Orchestrator
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+"""
+
+        MAIN_WRAPPER = """\
+import 'package:flutter/material.dart';
+
+// ── código colado pelo usuário ──
+{user_code}
+"""
+
+        @staticmethod
+        def from_code(code: str, work_dir: Path, log_cb) -> Path:
+            """Cria projeto Flutter completo a partir de código colado."""
+            project_dir = work_dir / "pasted_project"
+            if project_dir.exists():
+                shutil.rmtree(project_dir)
+
+            log_cb("🔧 Criando estrutura Flutter para código colado...", "info")
+            try:
+                result = subprocess.run(
+                    ["flutter", "create", "--project-name", "flutter_app_generated",
+                     "--org", "com.orchestrator", str(project_dir)],
+                    capture_output=True, text=True, timeout=120
+                )
+                if result.returncode != 0:
+                    raise Exception(result.stderr or result.stdout)
+            except FileNotFoundError:
+                raise Exception("Flutter não encontrado no PATH.")
+
+            # Substitui main.dart pelo código do usuário
+            main_dart = project_dir / "lib" / "main.dart"
+            # Se o código já tem 'void main()', usa direto; senão envolve
+            if "void main(" in code:
+                main_dart.write_text(code, encoding="utf-8")
+            else:
+                main_dart.write_text(
+                    ProjectSourceManager.MAIN_WRAPPER.format(user_code=code),
+                    encoding="utf-8"
+                )
+            log_cb(f"📝 main.dart substituído pelo código colado.", "success")
+            return project_dir
+
+        @staticmethod
+        def from_directory(path: str, log_cb) -> Path:
+            """Valida e retorna o caminho de um projeto Flutter existente."""
+            p = Path(path).resolve()
+            if not (p / "pubspec.yaml").exists():
+                raise Exception(f"pubspec.yaml não encontrado em: {p}")
+            log_cb(f"📁 Usando projeto existente: {p}", "info")
+            return p
+
+        @staticmethod
+        def from_github(url: str, work_dir: Path, token: str, log_cb) -> Path:
+            """Clona repositório GitHub e retorna o caminho."""
+            # Limpa URL
+            url = url.strip().rstrip("/")
+            if not url.startswith("http"):
+                url = "https://github.com/" + url
+
+            # Injeta token se fornecido
+            clone_url = url
+            if token:
+                clone_url = re.sub(r"https://", f"https://{token}@", url)
+
+            repo_name = url.rstrip("/").split("/")[-1].replace(".git", "")
+            dest = work_dir / repo_name
+            if dest.exists():
+                shutil.rmtree(dest)
+
+            log_cb(f"⬇️ Clonando repositório: {url}", "info")
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", clone_url, str(dest)],
+                capture_output=True, text=True, timeout=300
+            )
+            if result.returncode != 0:
+                raise Exception(result.stderr or result.stdout)
+
+            # Verifica se é projeto Flutter
+            if not (dest / "pubspec.yaml").exists():
+                raise Exception("Repositório clonado não contém pubspec.yaml. Não é um projeto Flutter.")
+
+            log_cb(f"✅ Repositório clonado em: {dest}", "success")
+            return dest
+
+    # ─────────────────────────────────────────────
+    #  Main GUI
+    # ─────────────────────────────────────────────
     class FlutterOrchestratorGUI(ctk.CTk):
         def __init__(self):
             super().__init__()
-
-            # Configuração da janela principal
             self.title("🚀 Flutter Build Orchestrator")
-            self.geometry("900x700")
-            self.minsize(800, 600)
+            self.geometry("1000x780")
+            self.minsize(900, 650)
 
-            # Variáveis de estado
-            self.project_path = tk.StringVar()
-            self.output_path = tk.StringVar()
             self.build_type = tk.StringVar(value="release")
             self.auto_install = tk.BooleanVar(value=True)
+            self.auto_adb_install = tk.BooleanVar(value=True)
+            self.github_token = tk.StringVar()
             self.is_building = False
-            self.process = None
+            self.last_apk_path = None
+            self.work_dir = Path(tempfile.mkdtemp(prefix="flutter_orch_"))
 
-            # Criar layout
-            self.create_widgets()
+            self._build_ui()
+            self._refresh_devices()
 
-        def create_widgets(self):
-            """Cria todos os widgets da interface"""
-            
-            # Frame principal com padding
-            self.main_frame = ctk.CTkFrame(self, corner_radius=0)
-            self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        # ── UI ───────────────────────────────────
+        def _build_ui(self):
+            # Cabeçalho
+            header = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+            header.pack(fill="x", padx=20, pady=(15, 5))
+            ctk.CTkLabel(
+                header, text="🚀 Flutter Build Orchestrator",
+                font=ctk.CTkFont(size=22, weight="bold")
+            ).pack(side="left")
+            ctk.CTkLabel(
+                header, text="compile · instale · entregue",
+                font=ctk.CTkFont(size=12), text_color="gray"
+            ).pack(side="left", padx=12, pady=(4, 0))
 
-            # Título
-            self.title_label = ctk.CTkLabel(
-                self.main_frame, 
-                text="🚀 Flutter Build Orchestrator", 
-                font=ctk.CTkFont(size=24, weight="bold")
-            )
-            self.title_label.pack(pady=(0, 20))
+            # Notebook (tabs)
+            self.tabview = ctk.CTkTabview(self, height=280)
+            self.tabview.pack(fill="x", padx=20, pady=(5, 0))
+            self.tabview.add("📋 Colar Código")
+            self.tabview.add("📁 Pasta / Diretório")
+            self.tabview.add("🔗 Link GitHub")
 
-            # Frame de configuração
-            self.config_frame = ctk.CTkFrame(self.main_frame)
-            self.config_frame.pack(fill="x", pady=(0, 20))
+            self._build_tab_code()
+            self._build_tab_folder()
+            self._build_tab_github()
 
-            # Seleção do projeto
-            self.project_label = ctk.CTkLabel(self.config_frame, text="📁 Projeto Flutter:")
-            self.project_label.grid(row=0, column=0, padx=(10, 10), pady=15, sticky="w")
-            
-            self.project_entry = ctk.CTkEntry(
-                self.config_frame, 
-                textvariable=self.project_path, 
-                width=500,
-                placeholder_text="Selecione a pasta do projeto Flutter..."
-            )
-            self.project_entry.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
-            
-            self.project_btn = ctk.CTkButton(
-                self.config_frame, 
-                text="📂 Procurar", 
-                command=self.browse_project,
-                width=100
-            )
-            self.project_btn.grid(row=0, column=2, padx=10, pady=15)
+            # Opções de build
+            self._build_options()
 
-            # Pasta de saída (opcional)
-            self.output_label = ctk.CTkLabel(self.config_frame, text="📤 Pasta de Saída:")
-            self.output_label.grid(row=1, column=0, padx=(10, 10), pady=15, sticky="w")
-            
-            self.output_entry = ctk.CTkEntry(
-                self.config_frame, 
-                textvariable=self.output_path, 
-                width=500,
-                placeholder_text="Deixe vazio para usar pasta padrão do projeto..."
-            )
-            self.output_entry.grid(row=1, column=1, padx=10, pady=15, sticky="ew")
-            
-            self.output_btn = ctk.CTkButton(
-                self.config_frame, 
-                text="📂 Procurar", 
-                command=self.browse_output,
-                width=100
-            )
-            self.output_btn.grid(row=1, column=2, padx=10, pady=15)
+            # ADB
+            self._build_adb_section()
 
-            # Opções de Build
-            self.options_frame = ctk.CTkFrame(self.main_frame)
-            self.options_frame.pack(fill="x", pady=(0, 20))
-
-            self.options_label = ctk.CTkLabel(self.options_frame, text="⚙️ Opções de Build:", font=ctk.CTkFont(weight="bold"))
-            self.options_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-
-            # Tipo de Build (Radio buttons)
-            self.release_radio = ctk.CTkRadioButton(
-                self.options_frame, 
-                text="📦 Release (Produção)", 
-                variable=self.build_type, 
-                value="release"
-            )
-            self.release_radio.grid(row=1, column=0, padx=20, pady=5, sticky="w")
-
-            self.debug_radio = ctk.CTkRadioButton(
-                self.options_frame, 
-                text="🐛 Debug (Testes)", 
-                variable=self.build_type, 
-                value="debug"
-            )
-            self.debug_radio.grid(row=1, column=1, padx=20, pady=5, sticky="w")
-
-            # Auto-install checkbox
-            self.auto_install_check = ctk.CTkCheckBox(
-                self.options_frame, 
-                text="🔄 Instalar Flutter automaticamente se não encontrado", 
-                variable=self.auto_install
-            )
-            self.auto_install_check.grid(row=2, column=0, columnspan=2, padx=20, pady=10, sticky="w")
-
-            # Botão de Build
+            # Botão principal
             self.build_button = ctk.CTkButton(
-                self.main_frame, 
-                text="🔨 Iniciar Build", 
+                self, text="🔨 Iniciar Build",
                 command=self.start_build,
-                height=50,
-                font=ctk.CTkFont(size=16, weight="bold"),
-                fg_color="#28a745",
-                hover_color="#218838"
+                height=48,
+                font=ctk.CTkFont(size=15, weight="bold"),
+                fg_color="#28a745", hover_color="#218838"
             )
-            self.build_button.pack(fill="x", pady=(0, 20), padx=20)
+            self.build_button.pack(fill="x", padx=20, pady=(8, 4))
 
-            # Área de Log
-            self.log_frame = ctk.CTkFrame(self.main_frame)
-            self.log_frame.pack(fill="both", expand=True, pady=(0, 10))
+            # Progress + status
+            self.progress_bar = ctk.CTkProgressBar(self, mode="indeterminate")
+            self.progress_bar.pack(fill="x", padx=20, pady=(0, 2))
+            self.progress_bar.set(0)
+            self.status_label = ctk.CTkLabel(self, text="✅ Pronto", text_color="gray")
+            self.status_label.pack(anchor="w", padx=22)
 
-            self.log_label = ctk.CTkLabel(self.log_frame, text="📋 Logs em Tempo Real:", font=ctk.CTkFont(weight="bold"))
-            self.log_label.pack(anchor="w", padx=10, pady=(10, 5))
-
-            self.log_text = ctk.CTkTextbox(self.log_frame, wrap="word", state="disabled")
+            # Log
+            log_frame = ctk.CTkFrame(self)
+            log_frame.pack(fill="both", expand=True, padx=20, pady=(4, 12))
+            ctk.CTkLabel(log_frame, text="📋 Logs em Tempo Real",
+                         font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(8, 2))
+            self.log_text = ctk.CTkTextbox(log_frame, wrap="word", state="disabled",
+                                           font=ctk.CTkFont(family="Courier", size=12))
             self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-            # Barra de progresso
-            self.progress_bar = ctk.CTkProgressBar(self.main_frame, mode="indeterminate")
-            self.progress_bar.pack(fill="x", padx=20, pady=(0, 10))
-            self.progress_bar.set(0)
+        def _build_tab_code(self):
+            tab = self.tabview.tab("📋 Colar Código")
+            ctk.CTkLabel(tab, text="Cole seu código Dart/Flutter abaixo. Um projeto completo será gerado automaticamente.",
+                         text_color="gray").pack(anchor="w", padx=5, pady=(6, 4))
+            self.code_text = ctk.CTkTextbox(tab, wrap="word",
+                                            font=ctk.CTkFont(family="Courier", size=12),
+                                            height=180)
+            self.code_text.pack(fill="both", expand=True, padx=5, pady=(0, 6))
+            self.code_text.insert("end", "// Cole seu código Dart aqui\n// Ex: void main() => runApp(MyApp());\n")
 
-            # Status label
-            self.status_label = ctk.CTkLabel(self.main_frame, text="✅ Pronto para iniciar", text_color="gray")
-            self.status_label.pack(pady=(0, 10))
+        def _build_tab_folder(self):
+            tab = self.tabview.tab("📁 Pasta / Diretório")
+            self.folder_path = tk.StringVar()
+            row = ctk.CTkFrame(tab, fg_color="transparent")
+            row.pack(fill="x", padx=5, pady=20)
+            ctk.CTkLabel(row, text="Pasta do projeto:", width=130).pack(side="left")
+            ctk.CTkEntry(row, textvariable=self.folder_path,
+                         placeholder_text="Selecione ou digite o caminho...",
+                         width=500).pack(side="left", padx=8)
+            ctk.CTkButton(row, text="📂 Procurar", width=100,
+                          command=self._browse_folder).pack(side="left")
 
-            # Configurar grid weights
-            self.config_frame.grid_columnconfigure(1, weight=1)
+        def _build_tab_github(self):
+            tab = self.tabview.tab("🔗 Link GitHub")
+            self.github_url = tk.StringVar()
 
-        def browse_project(self):
-            """Abre dialog para selecionar pasta do projeto"""
+            row1 = ctk.CTkFrame(tab, fg_color="transparent")
+            row1.pack(fill="x", padx=5, pady=(16, 6))
+            ctk.CTkLabel(row1, text="URL do repositório:", width=150).pack(side="left")
+            ctk.CTkEntry(row1, textvariable=self.github_url,
+                         placeholder_text="https://github.com/usuario/repo  ou  usuario/repo",
+                         width=550).pack(side="left", padx=8)
+
+            row2 = ctk.CTkFrame(tab, fg_color="transparent")
+            row2.pack(fill="x", padx=5, pady=(0, 16))
+            ctk.CTkLabel(row2, text="Token (privado):", width=150,
+                         text_color="gray").pack(side="left")
+            ctk.CTkEntry(row2, textvariable=self.github_token,
+                         placeholder_text="ghp_xxx... (opcional, para repos privados)",
+                         show="*", width=400).pack(side="left", padx=8)
+
+        def _build_options(self):
+            frame = ctk.CTkFrame(self)
+            frame.pack(fill="x", padx=20, pady=(8, 0))
+            ctk.CTkLabel(frame, text="⚙️ Opções:",
+                         font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12)
+            ctk.CTkRadioButton(frame, text="📦 Release", variable=self.build_type,
+                               value="release").pack(side="left", padx=10, pady=8)
+            ctk.CTkRadioButton(frame, text="🐛 Debug", variable=self.build_type,
+                               value="debug").pack(side="left", padx=10)
+            ctk.CTkCheckBox(frame, text="Instalar Flutter auto",
+                            variable=self.auto_install).pack(side="left", padx=20)
+
+        def _build_adb_section(self):
+            frame = ctk.CTkFrame(self)
+            frame.pack(fill="x", padx=20, pady=(6, 0))
+
+            ctk.CTkLabel(frame, text="📱 ADB:",
+                         font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
+
+            self.device_var = tk.StringVar(value="Nenhum dispositivo")
+            self.device_menu = ctk.CTkOptionMenu(frame, variable=self.device_var,
+                                                  values=["Nenhum dispositivo"],
+                                                  width=240)
+            self.device_menu.pack(side="left", padx=8)
+
+            ctk.CTkButton(frame, text="🔄 Atualizar", width=90,
+                          command=self._refresh_devices).pack(side="left", padx=4)
+
+            ctk.CTkCheckBox(frame, text="Instalar automaticamente após build",
+                            variable=self.auto_adb_install).pack(side="left", padx=14)
+
+            self.install_btn = ctk.CTkButton(
+                frame, text="📲 Instalar no Dispositivo", width=200,
+                command=self._manual_install,
+                fg_color="#1565C0", hover_color="#0D47A1",
+                state="disabled"
+            )
+            self.install_btn.pack(side="left", padx=8)
+
+        # ── Device helpers ────────────────────────
+        def _refresh_devices(self):
+            adb = ADBHelper.find_adb()
+            if not adb:
+                self.device_menu.configure(values=["ADB não encontrado"])
+                self.device_var.set("ADB não encontrado")
+                self._devices = []
+                return
+            devices = ADBHelper.list_devices(adb)
+            self._adb_path = adb
+            self._devices = devices
+            if devices:
+                labels = [f"{m} ({s})" for s, m in devices]
+                self.device_menu.configure(values=labels)
+                self.device_var.set(labels[0])
+            else:
+                self.device_menu.configure(values=["Nenhum dispositivo conectado"])
+                self.device_var.set("Nenhum dispositivo conectado")
+
+        def _get_selected_serial(self):
+            if not hasattr(self, "_devices") or not self._devices:
+                return None
+            label = self.device_var.get()
+            for serial, model in self._devices:
+                if serial in label or model in label:
+                    return serial
+            return self._devices[0][0] if self._devices else None
+
+        def _manual_install(self):
+            if not self.last_apk_path:
+                messagebox.showwarning("Sem APK", "Faça um build primeiro.")
+                return
+            serial = self._get_selected_serial()
+            if not serial:
+                messagebox.showerror("Dispositivo", "Nenhum dispositivo ADB selecionado.")
+                return
+            threading.Thread(
+                target=ADBHelper.install_apk,
+                args=(self._adb_path, serial, self.last_apk_path, self.log_message),
+                daemon=True
+            ).start()
+
+        # ── Browse ───────────────────────────────
+        def _browse_folder(self):
             folder = filedialog.askdirectory(title="Selecione a pasta do projeto Flutter")
             if folder:
-                self.project_path.set(folder)
-                self.log_message(f"📁 Projeto selecionado: {folder}", "info")
+                self.folder_path.set(folder)
 
-        def browse_output(self):
-            """Abre dialog para selecionar pasta de saída"""
-            folder = filedialog.askdirectory(title="Selecione a pasta de saída")
-            if folder:
-                self.output_path.set(folder)
-                self.log_message(f"📤 Pasta de saída definida: {folder}", "info")
-
+        # ── Logging ──────────────────────────────
         def log_message(self, message, level="info"):
-            """Adiciona mensagem ao log com cores diferentes"""
+            prefix_map = {"error": "❌", "success": "✅", "warning": "⚠️", "info": "ℹ️"}
+            prefix = prefix_map.get(level, "•")
+            ts = datetime.now().strftime("%H:%M:%S")
             self.log_text.configure(state="normal")
-            
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            
-            # Cores baseadas no nível
-            if level == "error":
-                color = "#ff4444"
-                prefix = "❌"
-            elif level == "success":
-                color = "#00cc66"
-                prefix = "✅"
-            elif level == "warning":
-                color = "#ffaa00"
-                prefix = "⚠️"
-            elif level == "info":
-                color = "#4488ff"
-                prefix = "ℹ️"
-            else:
-                color = "#ffffff"
-                prefix = "•"
-
-            # Inserir texto colorido (simulado com tags)
-            self.log_text.insert("end", f"[{timestamp}] {prefix} {message}\n")
+            self.log_text.insert("end", f"[{ts}] {prefix} {message}\n")
             self.log_text.see("end")
             self.log_text.configure(state="disabled")
 
+        def update_status(self, text, color="#4488ff"):
+            self.status_label.configure(text=text, text_color=color)
+
+        # ── Build entry point ─────────────────────
         def start_build(self):
-            """Inicia o processo de build em uma thread separada"""
             if self.is_building:
-                messagebox.showwarning("Atenção", "Um build já está em andamento!")
+                messagebox.showwarning("Atenção", "Build em andamento.")
                 return
 
-            project_path = self.project_path.get().strip()
-            
-            if not project_path:
-                messagebox.showerror("Erro", "Por favor, selecione a pasta do projeto Flutter!")
-                return
+            active_tab = self.tabview.get()
 
-            if not os.path.exists(project_path):
-                messagebox.showerror("Erro", "A pasta do projeto não existe!")
-                return
+            # Validações por aba
+            if active_tab == "📋 Colar Código":
+                code = self.code_text.get("1.0", "end").strip()
+                if not code or code.startswith("// Cole seu"):
+                    messagebox.showerror("Erro", "Cole algum código Dart antes de iniciar.")
+                    return
+                source = ("code", code)
 
-            # Verificar se é um projeto Flutter válido
-            pubspec_file = os.path.join(project_path, "pubspec.yaml")
-            if not os.path.exists(pubspec_file):
-                messagebox.showerror("Erro", "Não foi encontrado 'pubspec.yaml'. Isso não parece ser um projeto Flutter válido!")
-                return
+            elif active_tab == "📁 Pasta / Diretório":
+                path = self.folder_path.get().strip()
+                if not path:
+                    messagebox.showerror("Erro", "Selecione uma pasta de projeto.")
+                    return
+                source = ("folder", path)
 
-            # Preparar para build
+            else:  # GitHub
+                url = self.github_url.get().strip()
+                if not url:
+                    messagebox.showerror("Erro", "Informe a URL do repositório.")
+                    return
+                source = ("github", url)
+
             self.is_building = True
-            self.build_button.configure(text="⏳ Build em Andamento...", state="disabled", fg_color="#ffc107")
+            self.last_apk_path = None
+            self.install_btn.configure(state="disabled")
+            self.build_button.configure(text="⏳ Compilando...", state="disabled",
+                                        fg_color="#ffc107")
             self.progress_bar.start()
-            self.status_label.configure(text="🔄 Iniciando processo de build...", text_color="#ffc107")
-            
-            # Limpar log anterior
+            self.update_status("🔄 Iniciando...", "#ffc107")
             self.log_text.configure(state="normal")
             self.log_text.delete("1.0", "end")
             self.log_text.configure(state="disabled")
 
-            # Iniciar build em thread separada
-            build_thread = threading.Thread(target=self.run_build_process, args=(project_path,), daemon=True)
-            build_thread.start()
+            threading.Thread(target=self._build_worker, args=(source,), daemon=True).start()
 
-        def run_build_process(self, project_path):
-            """Executa o processo de build"""
+        # ── Build worker ──────────────────────────
+        def _build_worker(self, source):
             try:
-                start_time = datetime.now()
-                
-                self.log_message("🚀 Iniciando Flutter Build Orchestrator", "info")
-                self.log_message(f"📁 Projeto: {project_path}", "info")
-                self.log_message(f"📦 Tipo de build: {self.build_type.get().upper()}", "info")
-                
-                # Passo 1: Verificar/Instalar Flutter
+                start = datetime.now()
+
+                # 1. Resolver projeto
+                source_type, source_data = source
+                self.update_status("Preparando projeto...")
+
+                if source_type == "code":
+                    project_path = ProjectSourceManager.from_code(
+                        source_data, self.work_dir, self.log_message)
+                elif source_type == "folder":
+                    project_path = ProjectSourceManager.from_directory(
+                        source_data, self.log_message)
+                else:  # github
+                    project_path = ProjectSourceManager.from_github(
+                        source_data, self.work_dir,
+                        self.github_token.get().strip(), self.log_message)
+
+                # 2. Verificar Flutter
                 self.update_status("Verificando Flutter...")
-                flutter_available = self.check_flutter()
-                
-                if not flutter_available:
-                    if self.auto_install.get():
-                        self.log_message("⚠️ Flutter não encontrado. Tentando instalar automaticamente...", "warning")
-                        self.update_status("Instalando Flutter...")
-                        if not self.install_flutter():
-                            raise Exception("Falha na instalação automática do Flutter")
-                        self.log_message("✅ Flutter instalado com sucesso!", "success")
-                    else:
-                        raise Exception("Flutter não encontrado. Marque 'Instalar automaticamente' ou instale manualmente.")
-                
-                # Passo 2: Limpeza
-                self.update_status("Limpando build anterior...")
-                self.log_message("🧹 Executando flutter clean...", "info")
-                if not self.run_command(["flutter", "clean"], project_path):
-                    raise Exception("Falha na limpeza do projeto")
-                
-                # Passo 3: Obter dependências
+                if not self._check_flutter():
+                    raise Exception("Flutter não encontrado no PATH. Instale manualmente ou ative auto-instalar.")
+
+                # 3. flutter clean
+                self.update_status("Limpando projeto...")
+                self.log_message("🧹 flutter clean", "info")
+                self._run_cmd(["flutter", "clean"], project_path)
+
+                # 4. pub get
                 self.update_status("Baixando dependências...")
-                self.log_message("📥 Executando flutter pub get...", "info")
-                if not self.run_command(["flutter", "pub", "get"], project_path):
-                    raise Exception("Falha ao obter dependências")
-                
-                # Passo 4: Análise estática
-                self.update_status("Analisando código...")
-                self.log_message("🔍 Executando flutter analyze...", "info")
-                # Não falhamos se houver warnings, apenas informamos
-                self.run_command(["flutter", "analyze"], project_path, fail_on_error=False)
-                
-                # Passo 5: Build APK
-                self.update_status("Compilando APK...")
-                build_args = ["flutter", "build", "apk"]
-                if self.build_type.get() == "release":
-                    build_args.append("--release")
-                else:
-                    build_args.append("--debug")
-                
-                self.log_message(f"🔨 Compilando APK ({self.build_type.get().upper()})...", "info")
-                if not self.run_command(build_args, project_path):
+                self.log_message("📥 flutter pub get", "info")
+                if not self._run_cmd(["flutter", "pub", "get"], project_path):
+                    raise Exception("Falha em flutter pub get")
+
+                # 5. build apk
+                build_flag = "--release" if self.build_type.get() == "release" else "--debug"
+                self.update_status(f"Compilando APK ({self.build_type.get()})...")
+                self.log_message(f"🔨 flutter build apk {build_flag}", "info")
+                if not self._run_cmd(["flutter", "build", "apk", build_flag], project_path):
                     raise Exception("Falha na compilação do APK")
-                
-                # Passo 6: Localizar e copiar APK
-                self.update_status("Finalizando...")
-                apk_path = self.find_apk(project_path, self.build_type.get())
-                
-                if apk_path and os.path.exists(apk_path):
-                    output_dir = self.output_path.get().strip()
-                    if not output_dir:
-                        output_dir = os.path.join(project_path, "build_outputs")
-                    
-                    os.makedirs(output_dir, exist_ok=True)
-                    
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    apk_name = f"app_{self.build_type.get()}_{timestamp}.apk"
-                    final_path = os.path.join(output_dir, apk_name)
-                    
-                    import shutil
-                    shutil.copy2(apk_path, final_path)
-                    
-                    self.log_message(f"✅ APK gerado com sucesso!", "success")
-                    self.log_message(f"📦 Arquivo: {final_path}", "success")
-                    
-                    elapsed_time = datetime.now() - start_time
-                    self.log_message(f"⏱️ Tempo total: {elapsed_time}", "info")
-                    
-                    self.update_status("Build concluído com sucesso!")
-                    messagebox.showinfo("Sucesso", f"APK gerado com sucesso!\n\nArquivo: {final_path}")
-                else:
-                    raise Exception("APK não encontrado após a compilação")
-                    
+
+                # 6. Localizar APK
+                apk = self._find_apk(project_path, self.build_type.get())
+                if not apk:
+                    raise Exception("APK não encontrado após build")
+
+                self.last_apk_path = apk
+                elapsed = datetime.now() - start
+                self.log_message(f"✅ APK: {apk}", "success")
+                self.log_message(f"⏱️ Tempo: {elapsed}", "info")
+                self.update_status("✅ Build concluído!", "#00cc66")
+
+                # Habilitar botão de instalação manual
+                self.install_btn.configure(state="normal")
+
+                # 7. ADB auto-install
+                if self.auto_adb_install.get():
+                    serial = self._get_selected_serial()
+                    if serial and hasattr(self, "_adb_path"):
+                        ADBHelper.install_apk(self._adb_path, serial, apk, self.log_message)
+                    else:
+                        self.log_message("⚠️ Nenhum dispositivo ADB disponível para instalação automática.", "warning")
+
             except Exception as e:
-                self.log_message(f"❌ Erro: {str(e)}", "error")
-                self.update_status("Build falhou!")
-                messagebox.showerror("Erro", f"Falha no build:\n{str(e)}")
-            
+                self.log_message(f"❌ {e}", "error")
+                self.update_status("❌ Build falhou.", "#ff4444")
             finally:
                 self.is_building = False
-                self.build_button.configure(text="🔨 Iniciar Build", state="normal", fg_color="#28a745")
+                self.build_button.configure(text="🔨 Iniciar Build", state="normal",
+                                            fg_color="#28a745")
                 self.progress_bar.stop()
                 self.progress_bar.set(0)
 
-        def update_status(self, status):
-            """Atualiza o label de status"""
-            self.status_label.configure(text=status, text_color="#4488ff")
-
-        def check_flutter(self):
-            """Verifica se o Flutter está instalado"""
+        # ── Helpers ───────────────────────────────
+        def _check_flutter(self):
             try:
-                result = subprocess.run(
-                    ["flutter", "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
+                r = subprocess.run(["flutter", "--version"],
+                                   capture_output=True, text=True, timeout=30)
+                return r.returncode == 0
+            except Exception:
+                return False
+
+        def _run_cmd(self, cmd, cwd, fail_on_error=True):
+            try:
+                proc = subprocess.Popen(
+                    cmd, cwd=str(cwd),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1
                 )
-                return result.returncode == 0
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                return False
-
-        def install_flutter(self):
-            """Instala o Flutter automaticamente"""
-            system = platform.system()
-            
-            try:
-                if system == "Windows":
-                    download_url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.16.5-stable.zip"
-                    install_dir = os.path.expanduser("~\\flutter")
-                    self.log_message("📥 Baixando Flutter para Windows...", "info")
-                    
-                elif system == "Darwin":  # macOS
-                    download_url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_3.16.5-stable.zip"
-                    install_dir = os.path.expanduser("~/flutter")
-                    self.log_message("📥 Baixando Flutter para macOS...", "info")
-                    
-                elif system == "Linux":
-                    download_url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.5-stable.tar.xz"
-                    install_dir = os.path.expanduser("~/flutter")
-                    self.log_message("📥 Baixando Flutter para Linux...", "info")
-                    
-                else:
-                    self.log_message(f"Sistema operacional não suportado: {system}", "error")
-                    return False
-                
-                self.log_message("⚠️ Instalação automática requer implementação completa de download.", "warning")
-                self.log_message("📖 Por favor, instale o Flutter manualmente seguindo: https://docs.flutter.dev/get-started/install", "info")
-                
-                return False
-                
-            except Exception as e:
-                self.log_message(f"Erro na instalação: {str(e)}", "error")
-                return False
-
-        def run_command(self, cmd, cwd, fail_on_error=True):
-            """Executa um comando e retorna o resultado"""
-            try:
-                self.process = subprocess.Popen(
-                    cmd,
-                    cwd=cwd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    universal_newlines=True
-                )
-                
-                # Ler output em tempo real
-                for line in self.process.stdout:
+                for line in proc.stdout:
                     line = line.strip()
                     if line:
                         self.log_message(line, "info")
-                
-                self.process.wait()
-                
-                if self.process.returncode != 0 and fail_on_error:
-                    return False
-                return True
-                
+                proc.wait()
+                return proc.returncode == 0 or not fail_on_error
             except Exception as e:
-                self.log_message(f"Erro ao executar comando: {str(e)}", "error")
+                self.log_message(f"Erro ao executar {cmd[0]}: {e}", "error")
                 return False
-            finally:
-                self.process = None
 
-        def find_apk(self, project_path, build_type):
-            """Encontra o APK gerado"""
-            build_dir = os.path.join(project_path, "build", "app", "outputs", "flutter-apk")
-            
-            if not os.path.exists(build_dir):
+        @staticmethod
+        def _find_apk(project_path, build_type):
+            build_dir = Path(project_path) / "build" / "app" / "outputs" / "flutter-apk"
+            if not build_dir.exists():
                 return None
-            
-            # Procurar pelo APK mais recente
-            apk_files = []
-            for file in os.listdir(build_dir):
-                if file.endswith(".apk"):
-                    full_path = os.path.join(build_dir, file)
-                    apk_files.append((full_path, os.path.getmtime(full_path)))
-            
-            if apk_files:
-                # Ordenar por data (mais recente primeiro)
-                apk_files.sort(key=lambda x: x[1], reverse=True)
-                return apk_files[0][0]
-            
-            return None
+            apks = sorted(build_dir.glob("*.apk"), key=os.path.getmtime, reverse=True)
+            return str(apks[0]) if apks else None
 
 
+# ─────────────────────────────────────────────
+#  Entry point
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
     if HAS_GUI_SUPPORT:
         app = FlutterOrchestratorGUI()
         app.mainloop()
     else:
-        # Fallback para interface de linha de comando
         print("\n" + "="*60)
         print("🚀 FLUTTER BUILD ORCHESTRATOR - MODO TERMINAL")
-        print("="*60 + "\n")
-        
-        import argparse
-        
-        parser = argparse.ArgumentParser(description='Orquestrador de Build Flutter')
-        parser.add_argument('project_path', nargs='?', help='Caminho do projeto Flutter')
-        parser.add_argument('-o', '--output', help='Pasta de saída para o APK')
-        parser.add_argument('--debug', action='store_true', help='Build em modo debug')
-        parser.add_argument('--no-auto-install', action='store_true', help='Não instalar Flutter automaticamente')
-        
-        args = parser.parse_args()
-        
-        if not args.project_path:
-            args.project_path = input("📁 Digite o caminho do projeto Flutter: ").strip()
-        
-        if not args.project_path:
-            print("❌ Erro: Caminho do projeto não fornecido!")
-            sys.exit(1)
-        
-        # Importar e usar a lógica de build
-        from flutter_orchestrator import FlutterOrchestrator
-        
-        orchestrator = FlutterOrchestrator(
-            project_path=args.project_path,
-            output_path=args.output,
-            build_type="debug" if args.debug else "release",
-            auto_install=not args.no_auto_install
-        )
-        
-        success = orchestrator.run()
-        sys.exit(0 if success else 1)
+        print("="*60)
+        print("GUI indisponível (sem DISPLAY). Use flutter_orchestrator.py diretamente.")
+        sys.exit(1)
