@@ -481,9 +481,14 @@ import 'package:flutter/material.dart';
         def _build_worker(self, source):
             try:
                 start = datetime.now()
-
-                # 1. Resolver projeto
                 source_type, source_data = source
+
+                # 1. Garantir Flutter ANTES de qualquer coisa
+                self.update_status("Verificando Flutter...")
+                if not self._ensure_flutter():
+                    raise Exception("Flutter não disponível. Verifique os logs.")
+
+                # 2. Preparar projeto (agora flutter já está no PATH)
                 self.update_status("Preparando projeto...")
 
                 if source_type == "code":
@@ -496,11 +501,6 @@ import 'package:flutter/material.dart';
                     project_path = ProjectSourceManager.from_github(
                         source_data, self.work_dir,
                         self.github_token.get().strip(), self.log_message)
-
-                # 2. Verificar Flutter
-                self.update_status("Verificando Flutter...")
-                if not self._check_flutter():
-                    raise Exception("Flutter não encontrado no PATH. Instale manualmente ou ative auto-instalar.")
 
                 # 3. flutter clean
                 self.update_status("Limpando projeto...")
@@ -554,11 +554,104 @@ import 'package:flutter/material.dart';
 
         # ── Helpers ───────────────────────────────
         def _check_flutter(self):
+            """Verifica se flutter está acessível no PATH atual."""
             try:
                 r = subprocess.run(["flutter", "--version"],
                                    capture_output=True, text=True, timeout=30)
                 return r.returncode == 0
             except Exception:
+                return False
+
+        def _ensure_flutter(self):
+            """Garante que o Flutter está disponível. Instala se necessário e auto_install=True."""
+            if self._check_flutter():
+                self.log_message("✅ Flutter encontrado no PATH.", "success")
+                return True
+
+            self.log_message("⚠️ Flutter não encontrado no PATH.", "warning")
+
+            if not self.auto_install.get():
+                self.log_message("❌ Auto-instalação desativada. Instale o Flutter manualmente.", "error")
+                return False
+
+            self.log_message("📥 Iniciando download automático do Flutter SDK...", "info")
+            self.update_status("Baixando Flutter SDK...")
+
+            system = platform.system()
+            install_dir = Path.home() / ".flutter_orchestrator"
+            install_dir.mkdir(parents=True, exist_ok=True)
+
+            urls = {
+                "Linux":  "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.0-stable.tar.xz",
+                "Darwin": "https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_3.24.0-stable.zip",
+                "Windows": "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.24.0-stable.zip",
+            }
+            url = urls.get(system)
+            if not url:
+                self.log_message(f"❌ Sistema '{system}' não suportado para auto-instalação.", "error")
+                return False
+
+            filename = url.split("/")[-1]
+            archive_path = install_dir / filename
+
+            # Download com progresso
+            try:
+                from urllib.request import urlopen
+                import zipfile, tarfile as tf
+
+                self.log_message(f"⬇️ Baixando: {filename}", "info")
+                with urlopen(url) as resp:
+                    total = int(resp.getheader("Content-Length", 0))
+                    downloaded = 0
+                    block = 65536
+                    with open(archive_path, "wb") as f:
+                        while True:
+                            buf = resp.read(block)
+                            if not buf:
+                                break
+                            f.write(buf)
+                            downloaded += len(buf)
+                            if total:
+                                pct = downloaded / total * 100
+                                self.update_status(f"Baixando Flutter... {pct:.0f}%")
+
+                self.log_message("✅ Download concluído. Extraindo...", "success")
+                self.update_status("Extraindo Flutter SDK...")
+
+                # Extração
+                if filename.endswith(".zip"):
+                    with zipfile.ZipFile(archive_path, "r") as z:
+                        z.extractall(install_dir)
+                else:  # .tar.xz
+                    with tf.open(archive_path, "r:xz") as t:
+                        t.extractall(install_dir)
+
+                archive_path.unlink(missing_ok=True)
+
+                # Adiciona ao PATH desta sessão
+                flutter_bin = install_dir / "flutter" / "bin"
+                os.environ["PATH"] = str(flutter_bin) + os.pathsep + os.environ.get("PATH", "")
+                self.log_message(f"✅ Flutter instalado em: {flutter_bin}", "success")
+                self.log_message(f"💡 Para uso permanente: export PATH=\"$PATH:{flutter_bin}\"", "warning")
+
+                # Aceitar licenças Android
+                try:
+                    flutter_exe = str(flutter_bin / "flutter")
+                    subprocess.run([flutter_exe, "--version"],
+                                   capture_output=True, timeout=60)
+                    subprocess.run(
+                        [flutter_exe, "doctor", "--android-licenses"],
+                        input="y\ny\ny\ny\ny\n", text=True,
+                        capture_output=True, timeout=120
+                    )
+                    self.log_message("✅ Licenças Android aceitas.", "success")
+                except Exception as e:
+                    self.log_message(f"⚠️ Licenças: {e} — aceite manualmente depois.", "warning")
+
+                return self._check_flutter()
+
+            except Exception as e:
+                self.log_message(f"❌ Falha na instalação do Flutter: {e}", "error")
                 return False
 
         def _run_cmd(self, cmd, cwd, fail_on_error=True):
