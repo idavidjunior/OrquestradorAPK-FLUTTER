@@ -8,7 +8,6 @@ __pycache__/
 env/
 venv/
 .venv/
-.venv.bak/
 pip-log.txt
 pip-delete-this-directory.txt
 .tox/
@@ -19,43 +18,17 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
-*.pot
-*.pyc
-*.pyo
-*.pyd
-*.so
-*.egg-info/
-.eggs/
-.egg-info/
-.ipython/
-.pytest_cache/
-.mypy_cache/
-.hypothesis/
+.DS_Store
+Thumbs.db
 
-# Distribution / packaging
-.Python
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
 build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Environment
-.env
-.venv
-env/
-venv/
-ENV/
+ios/.symlinks
+lib/generated/
 
 # IDE
 .vscode/
@@ -64,7 +37,17 @@ ENV/
 *.swo
 *.tmp
 
-# OS
-.DS_Store
-Thumbs.db
+# Environment
+.env
+.env.local
+*.env.*
+
+# Dependencies
+node_modules/
+target/
+.gradle/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+coverage/
 ```

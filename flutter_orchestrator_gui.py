@@ -5,23 +5,43 @@ Flutter Build Orchestrator - Interface Gráfica
 Uma interface moderna para orquestrar builds de aplicativos Flutter.
 """
 
-import customtkinter as ctk
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import subprocess
-import threading
-import os
 import sys
-import platform
-import re
-from datetime import datetime
-from pathlib import Path
+import os
 
-# Configuração inicial do tema
-ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
-ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
+# Verificar se há suporte a GUI antes de importar tkinter
+def check_gui_support():
+    """Verifica se há suporte para interface gráfica"""
+    # Verificar variável DISPLAY (Linux/Mac)
+    if os.name == 'posix' and not os.environ.get('DISPLAY'):
+        return False
+    
+    try:
+        import tkinter
+        # Tentar criar uma janela invisível para testar
+        root = tkinter.Tk()
+        root.withdraw()
+        root.destroy()
+        return True
+    except Exception:
+        return False
 
-class FlutterOrchestratorGUI(ctk.CTk):
+HAS_GUI_SUPPORT = check_gui_support()
+
+if HAS_GUI_SUPPORT:
+    import customtkinter as ctk
+    import tkinter as tk
+    from tkinter import filedialog, messagebox
+    
+    # Configuração inicial do tema (apenas se GUI disponível)
+    ctk.set_appearance_mode("System")
+    ctk.set_default_color_theme("blue")
+    
+    class FlutterOrchestratorGUI(ctk.CTk):
+        pass
+
+# Placeholder para evitar erro de sintaxe quando HAS_GUI_SUPPORT=False
+class _FlutterOrchestratorGUI:
+    pass
     def __init__(self):
         super().__init__()
 
@@ -448,5 +468,41 @@ class FlutterOrchestratorGUI(ctk.CTk):
         return None
 
 if __name__ == "__main__":
-    app = FlutterOrchestratorGUI()
-    app.mainloop()
+    if HAS_GUI_SUPPORT:
+        app = FlutterOrchestratorGUI()
+        app.mainloop()
+    else:
+        # Fallback para interface de linha de comando
+        print("\n" + "="*60)
+        print("🚀 FLUTTER BUILD ORCHESTRATOR - MODO TERMINAL")
+        print("="*60 + "\n")
+        
+        import argparse
+        
+        parser = argparse.ArgumentParser(description='Orquestrador de Build Flutter')
+        parser.add_argument('project_path', nargs='?', help='Caminho do projeto Flutter')
+        parser.add_argument('-o', '--output', help='Pasta de saída para o APK')
+        parser.add_argument('--debug', action='store_true', help='Build em modo debug')
+        parser.add_argument('--no-auto-install', action='store_true', help='Não instalar Flutter automaticamente')
+        
+        args = parser.parse_args()
+        
+        if not args.project_path:
+            args.project_path = input("📁 Digite o caminho do projeto Flutter: ").strip()
+        
+        if not args.project_path:
+            print("❌ Erro: Caminho do projeto não fornecido!")
+            sys.exit(1)
+        
+        # Importar e usar a lógica de build
+        from flutter_orchestrator import FlutterOrchestrator
+        
+        orchestrator = FlutterOrchestrator(
+            project_path=args.project_path,
+            output_path=args.output,
+            build_type="debug" if args.debug else "release",
+            auto_install=not args.no_auto_install
+        )
+        
+        success = orchestrator.run()
+        sys.exit(0 if success else 1)
