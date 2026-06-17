@@ -33,6 +33,12 @@ if HAS_GUI_SUPPORT:
     import shutil
     import tempfile
     import re
+    import json
+    import time
+    import zipfile
+    import io
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError
     from datetime import datetime
     from pathlib import Path
 
@@ -216,6 +222,185 @@ import 'package:flutter/material.dart';
             return dest
 
     # ─────────────────────────────────────────────
+    #  CI Engine  (GitHub Actions fallback)
+    # ─────────────────────────────────────────────
+    class CIEngine:
+        """
+        Cérebro remoto: empacota o projeto, dispara o workflow
+        flutter-ci no GitHub Actions, monitora e devolve o APK.
+        """
+        CI_REPO  = "idavidjunior/flutter-ci"
+        WORKFLOW = "build.yml"
+        API      = "https://api.github.com"
+
+        def __init__(self, token: str, log_cb, status_cb):
+            self.token     = token
+            self.log       = log_cb
+            self.status    = status_cb
+            self._headers  = {
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+
+        def _api(self, method, path, body=None):
+            url  = f"{self.API}{path}"
+            data = json.dumps(body).encode() if body else None
+            req  = Request(url, data=data, headers={
+                **self._headers, "Content-Type": "application/json"
+            }, method=method)
+            with urlopen(req, timeout=30) as r:
+                return json.loads(r.read())
+
+        # ── Empacota projeto em zip base64 ──────────
+        def _zip_project(self, project_path: Path) -> str:
+            self.log("📦 Empacotando projeto para envio...", "info")
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in project_path.rglob("*"):
+                    # Ignora build/, .dart_tool/, .git/
+                    parts = f.parts
+                    if any(p in ("build", ".dart_tool", ".git", ".idea") for p in parts):
+                        continue
+                    if f.is_file():
+                        zf.write(f, f.relative_to(project_path))
+            size_kb = buf.tell() // 1024
+            self.log(f"📦 Zip: {size_kb} KB", "info")
+            buf.seek(0)
+            import base64
+            return base64.b64encode(buf.read()).decode()
+
+        # ── Dispara workflow ─────────────────────────
+        def dispatch(self, project_path: Path, build_type: str, session_id: str) -> bool:
+            b64 = self._zip_project(project_path)
+            self.log("🚀 Despachando build para GitHub Actions...", "info")
+            self.status("Enviando para GitHub Actions...")
+            try:
+                self._api("POST",
+                    f"/repos/{self.CI_REPO}/actions/workflows/{self.WORKFLOW}/dispatches",
+                    {
+                        "ref": "main",
+                        "inputs": {
+                            "project_zip_b64": b64,
+                            "build_type": build_type,
+                            "session_id": session_id,
+                        }
+                    }
+                )
+                self.log("✅ Workflow disparado.", "success")
+                return True
+            except Exception as e:
+                self.log(f"❌ Falha ao disparar workflow: {e}", "error")
+                return False
+
+        # ── Encontra o run recém-criado ──────────────
+        def _find_run(self, session_id: str, max_wait=60) -> dict | None:
+            self.log("🔍 Aguardando run do workflow...", "info")
+            deadline = time.time() + max_wait
+            while time.time() < deadline:
+                try:
+                    data = self._api("GET",
+                        f"/repos/{self.CI_REPO}/actions/runs?per_page=5")
+                    for run in data.get("workflow_runs", []):
+                        # Identifica pelo session_id no nome ou nas inputs
+                        if session_id in (run.get("name") or "") or \
+                           run.get("status") in ("queued", "in_progress"):
+                            return run
+                except Exception:
+                    pass
+                time.sleep(4)
+            return None
+
+        # ── Monitora até concluir ────────────────────
+        def monitor(self, session_id: str, timeout=1200) -> dict | None:
+            """Monitora o workflow e retorna o run quando terminar."""
+            run = self._find_run(session_id)
+            if not run:
+                self.log("❌ Run não encontrado.", "error")
+                return None
+
+            run_id = run["id"]
+            self.log(f"🔗 Run #{run_id}: {run['html_url']}", "info")
+            deadline = time.time() + timeout
+            dots = 0
+
+            while time.time() < deadline:
+                try:
+                    run = self._api("GET",
+                        f"/repos/{self.CI_REPO}/actions/runs/{run_id}")
+                    status     = run.get("status", "")
+                    conclusion = run.get("conclusion", "")
+                    dots = (dots + 1) % 4
+                    self.status(f"GitHub Actions: {status}{'.' * dots}")
+
+                    if status == "completed":
+                        if conclusion == "success":
+                            self.log("✅ Build remoto concluído com sucesso!", "success")
+                        else:
+                            self.log(f"❌ Build remoto falhou: {conclusion}", "error")
+                            self.log(f"🔗 Detalhes: {run['html_url']}", "info")
+                        return run if conclusion == "success" else None
+                except Exception as e:
+                    self.log(f"⚠️ Erro ao monitorar: {e}", "warning")
+                time.sleep(8)
+
+            self.log("❌ Timeout ao aguardar GitHub Actions.", "error")
+            return None
+
+        # ── Baixa o APK do artefato ──────────────────
+        def download_apk(self, run: dict, session_id: str, dest_dir: Path) -> Path | None:
+            self.log("⬇️ Baixando APK do artefato...", "info")
+            self.status("Baixando APK...")
+            try:
+                data = self._api("GET",
+                    f"/repos/{self.CI_REPO}/actions/runs/{run['id']}/artifacts")
+                artifacts = data.get("artifacts", [])
+                if not artifacts:
+                    self.log("❌ Nenhum artefato encontrado.", "error")
+                    return None
+
+                artifact = artifacts[0]
+                self.log(f"📦 Artefato: {artifact['name']} ({artifact['size_in_bytes']//1024} KB)", "info")
+
+                # Download via URL de redirect
+                dl_url = f"{self.API}/repos/{self.CI_REPO}/actions/artifacts/{artifact['id']}/zip"
+                req = Request(dl_url, headers=self._headers)
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                apk_path = dest_dir / f"app_{session_id}.apk"
+
+                with urlopen(req, timeout=120) as r:
+                    buf = io.BytesIO(r.read())
+
+                with zipfile.ZipFile(buf) as z:
+                    for name in z.namelist():
+                        if name.endswith(".apk"):
+                            with z.open(name) as src, open(apk_path, "wb") as dst:
+                                dst.write(src.read())
+                            break
+
+                if apk_path.exists():
+                    self.log(f"✅ APK baixado: {apk_path}", "success")
+                    return apk_path
+
+                self.log("❌ APK não encontrado no artefato.", "error")
+                return None
+
+            except Exception as e:
+                self.log(f"❌ Falha ao baixar APK: {e}", "error")
+                return None
+
+        # ── Pipeline completo ────────────────────────
+        def run_pipeline(self, project_path: Path, build_type: str) -> Path | None:
+            session_id = datetime.now().strftime("%Y%m%d%H%M%S")
+            if not self.dispatch(project_path, build_type, session_id):
+                return None
+            run = self.monitor(session_id)
+            if not run:
+                return None
+            dest = project_path.parent / "ci_outputs"
+            return self.download_apk(run, session_id, dest)
+
+    # ─────────────────────────────────────────────
     #  Main GUI
     # ─────────────────────────────────────────────
     class FlutterOrchestratorGUI(ctk.CTk):
@@ -229,6 +414,7 @@ import 'package:flutter/material.dart';
             self.auto_install = tk.BooleanVar(value=True)
             self.auto_adb_install = tk.BooleanVar(value=True)
             self.github_token = tk.StringVar()
+            self.ci_token = tk.StringVar()   # token para o CI engine
             self.is_building = False
             self.last_apk_path = None
             self.work_dir = Path(tempfile.mkdtemp(prefix="flutter_orch_"))
@@ -263,6 +449,9 @@ import 'package:flutter/material.dart';
 
             # Opções de build
             self._build_options()
+
+            # CI remoto
+            self._build_ci_section()
 
             # ADB
             self._build_adb_section()
@@ -345,6 +534,33 @@ import 'package:flutter/material.dart';
                                value="debug").pack(side="left", padx=10)
             ctk.CTkCheckBox(frame, text="Instalar Flutter auto",
                             variable=self.auto_install).pack(side="left", padx=20)
+
+        def _build_ci_section(self):
+            frame = ctk.CTkFrame(self)
+            frame.pack(fill="x", padx=20, pady=(6, 0))
+
+            ctk.CTkLabel(frame, text="☁️ CI Remoto:",
+                         font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
+
+            # Indicador de modo ativo
+            self.ci_mode_label = ctk.CTkLabel(
+                frame, text="● Local", text_color="#00cc66",
+                font=ctk.CTkFont(size=12, weight="bold")
+            )
+            self.ci_mode_label.pack(side="left", padx=(0, 14))
+
+            ctk.CTkLabel(frame, text="Token GitHub:", text_color="gray").pack(side="left")
+            ctk.CTkEntry(
+                frame, textvariable=self.ci_token,
+                placeholder_text="ghp_xxx... (necessário para fallback CI)",
+                show="*", width=320
+            ).pack(side="left", padx=8)
+
+            ctk.CTkLabel(
+                frame,
+                text="Fallback automático para GitHub Actions se Flutter local falhar",
+                text_color="gray", font=ctk.CTkFont(size=11)
+            ).pack(side="left", padx=8)
 
         def _build_adb_section(self):
             frame = ctk.CTkFrame(self)
@@ -482,75 +698,120 @@ import 'package:flutter/material.dart';
             try:
                 start = datetime.now()
                 source_type, source_data = source
+                apk = None
 
-                # 1. Garantir Flutter ANTES de qualquer coisa
-                self.update_status("Verificando Flutter...")
-                if not self._ensure_flutter():
-                    raise Exception("Flutter não disponível. Verifique os logs.")
+                # ── Tentativa LOCAL ───────────────────
+                flutter_ok = self._check_flutter()
 
-                # 2. Preparar projeto (agora flutter já está no PATH)
-                self.update_status("Preparando projeto...")
+                if flutter_ok or self.auto_install.get():
+                    self.log_message("🖥️ Tentando build local...", "info")
+                    self._set_ci_indicator("local")
+                    try:
+                        # 1. Garantir Flutter
+                        self.update_status("Verificando Flutter...")
+                        if not self._ensure_flutter():
+                            raise Exception("Flutter indisponível localmente.")
 
-                if source_type == "code":
-                    project_path = ProjectSourceManager.from_code(
-                        source_data, self.work_dir, self.log_message)
-                elif source_type == "folder":
-                    project_path = ProjectSourceManager.from_directory(
-                        source_data, self.log_message)
-                else:  # github
-                    project_path = ProjectSourceManager.from_github(
-                        source_data, self.work_dir,
-                        self.github_token.get().strip(), self.log_message)
+                        # 2. Preparar projeto
+                        self.update_status("Preparando projeto...")
+                        project_path = self._resolve_project(source_type, source_data)
 
-                # 3. flutter clean
-                self.update_status("Limpando projeto...")
-                self.log_message("🧹 flutter clean", "info")
-                self._run_cmd(["flutter", "clean"], project_path)
+                        # 3. Clean + pub get + build
+                        self.update_status("Limpando projeto...")
+                        self._run_cmd(["flutter", "clean"], project_path)
 
-                # 4. pub get
-                self.update_status("Baixando dependências...")
-                self.log_message("📥 flutter pub get", "info")
-                if not self._run_cmd(["flutter", "pub", "get"], project_path):
-                    raise Exception("Falha em flutter pub get")
+                        self.update_status("Baixando dependências...")
+                        self.log_message("📥 flutter pub get", "info")
+                        if not self._run_cmd(["flutter", "pub", "get"], project_path):
+                            raise Exception("flutter pub get falhou")
 
-                # 5. build apk
-                build_flag = "--release" if self.build_type.get() == "release" else "--debug"
-                self.update_status(f"Compilando APK ({self.build_type.get()})...")
-                self.log_message(f"🔨 flutter build apk {build_flag}", "info")
-                if not self._run_cmd(["flutter", "build", "apk", build_flag], project_path):
-                    raise Exception("Falha na compilação do APK")
+                        build_flag = "--" + self.build_type.get()
+                        self.update_status(f"Compilando APK ({self.build_type.get()})...")
+                        self.log_message(f"🔨 flutter build apk {build_flag}", "info")
+                        if not self._run_cmd(["flutter", "build", "apk", build_flag], project_path):
+                            raise Exception("flutter build apk falhou")
 
-                # 6. Localizar APK
-                apk = self._find_apk(project_path, self.build_type.get())
+                        apk = self._find_apk(project_path, self.build_type.get())
+                        if not apk:
+                            raise Exception("APK não encontrado após build local")
+
+                        self.log_message("✅ Build local concluído.", "success")
+
+                    except Exception as local_err:
+                        self.log_message(f"⚠️ Build local falhou: {local_err}", "warning")
+                        apk = None  # força fallback
+
+                # ── Fallback CI ───────────────────────
                 if not apk:
-                    raise Exception("APK não encontrado após build")
+                    token = self.ci_token.get().strip()
+                    if not token:
+                        raise Exception(
+                            "Build local falhou e nenhum token GitHub configurado para fallback CI.\n"
+                            "Adicione seu token no campo ☁️ CI Remoto."
+                        )
 
+                    self.log_message("☁️ Ativando fallback: GitHub Actions...", "warning")
+                    self._set_ci_indicator("ci")
+
+                    # Precisamos do projeto em disco para zipar
+                    self.update_status("Preparando projeto para CI...")
+                    project_path = self._resolve_project(source_type, source_data)
+
+                    ci = CIEngine(token, self.log_message, self.update_status)
+                    apk_path = ci.run_pipeline(project_path, self.build_type.get())
+                    if not apk_path:
+                        raise Exception("Build via GitHub Actions falhou. Veja os logs acima.")
+                    apk = str(apk_path)
+
+                # ── Entrega ───────────────────────────
                 self.last_apk_path = apk
                 elapsed = datetime.now() - start
-                self.log_message(f"✅ APK: {apk}", "success")
-                self.log_message(f"⏱️ Tempo: {elapsed}", "info")
+                self.log_message(f"📦 APK: {apk}", "success")
+                self.log_message(f"⏱️ Tempo total: {elapsed}", "info")
                 self.update_status("✅ Build concluído!", "#00cc66")
-
-                # Habilitar botão de instalação manual
                 self.install_btn.configure(state="normal")
 
-                # 7. ADB auto-install
                 if self.auto_adb_install.get():
                     serial = self._get_selected_serial()
                     if serial and hasattr(self, "_adb_path"):
                         ADBHelper.install_apk(self._adb_path, serial, apk, self.log_message)
                     else:
-                        self.log_message("⚠️ Nenhum dispositivo ADB disponível para instalação automática.", "warning")
+                        self.log_message("⚠️ Sem dispositivo ADB para instalação automática.", "warning")
 
             except Exception as e:
                 self.log_message(f"❌ {e}", "error")
                 self.update_status("❌ Build falhou.", "#ff4444")
             finally:
+                self._set_ci_indicator("idle")
                 self.is_building = False
                 self.build_button.configure(text="🔨 Iniciar Build", state="normal",
                                             fg_color="#28a745")
                 self.progress_bar.stop()
                 self.progress_bar.set(0)
+
+        def _resolve_project(self, source_type, source_data) -> Path:
+            """Resolve qualquer fonte para um Path de projeto Flutter em disco."""
+            if source_type == "code":
+                return ProjectSourceManager.from_code(
+                    source_data, self.work_dir, self.log_message)
+            elif source_type == "folder":
+                return ProjectSourceManager.from_directory(
+                    source_data, self.log_message)
+            else:
+                return ProjectSourceManager.from_github(
+                    source_data, self.work_dir,
+                    self.github_token.get().strip(), self.log_message)
+
+        def _set_ci_indicator(self, mode: str):
+            colors = {"local": "#00cc66", "ci": "#ffc107", "idle": "gray"}
+            labels = {"local": "● Local", "ci": "● GitHub Actions", "idle": "● Aguardando"}
+            try:
+                self.ci_mode_label.configure(
+                    text=labels.get(mode, "●"),
+                    text_color=colors.get(mode, "gray")
+                )
+            except Exception:
+                pass
 
         # ── Helpers ───────────────────────────────
         def _check_flutter(self):
