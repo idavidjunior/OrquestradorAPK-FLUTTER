@@ -164,21 +164,25 @@ class Checklist:
         return True   # warning, não bloqueia
 
     def _check_flutter(self) -> bool:
-        # Candidatos em ordem de prioridade
         candidates = self._flutter_candidates()
         for exe in candidates:
             try:
-                r = subprocess.run(
+                proc = subprocess.Popen(
                     [exe, "--version"],
-                    capture_output=True, text=True, timeout=30,
-                    env=os.environ.copy()
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                    env=os.environ.copy(),
                 )
-                if r.returncode == 0:
-                    version_line = (r.stdout + r.stderr).strip().split("\n")[0]
+                try:
+                    out, _ = proc.communicate(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    continue
+                if proc.returncode == 0:
+                    version_line = out.strip().split("\n")[0]
                     self.log.ok(f"Flutter: {version_line}")
                     self.log.info(f"  Executável: {exe}")
                     self.flutter_exe = exe
-                    # Garante que o bin/ está no PATH para subprocessos filhos
                     bin_dir = str(Path(exe).parent)
                     if bin_dir not in os.environ.get("PATH", ""):
                         os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
@@ -592,17 +596,22 @@ class BuildRunner:
         self.log.info(f"  em: {cwd}")
         try:
             env = os.environ.copy()
+            # Força UTF-8 na saída do Flutter no Windows
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["FLUTTER_SUPPRESS_ANALYTICS"] = "true"
             proc = subprocess.Popen(
                 cmd, cwd=str(cwd),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1, env=env,
-                encoding="utf-8", errors="replace",
+                env=env,
             )
             stdout_lines, stderr_lines = [], []
 
             def _read(stream, store, level):
-                for line in stream:
-                    line = line.rstrip()
+                for raw in stream:
+                    try:
+                        line = raw.decode("utf-8", errors="replace").rstrip()
+                    except Exception:
+                        line = repr(raw)
                     if line:
                         store.append(line)
                         self.log.put(line, level)
@@ -617,7 +626,7 @@ class BuildRunner:
 
             rc = proc.returncode
             if rc == 0:
-                self.log.ok(f"Concluído (exit 0)")
+                self.log.ok("Concluído (exit 0)")
                 return True
             else:
                 self.log.err(f"Falhou (exit {rc})")
@@ -912,6 +921,11 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 text=m, text_color="#ff4444"))
             self.log.err(f"Token inválido: {err}")
 
+    def _poll_adb(self):
+        """Verifica dispositivos a cada 2s — detecção automática."""
+        threading.Thread(target=self._refresh_devices, daemon=True).start()
+        self.after(2000, self._poll_adb)
+
     # ── ADB ─────────────────────────────────────
     def _refresh_devices(self):
         """Escaneia dispositivos ADB e atualiza UI. Pode ser chamado de qualquer thread."""
@@ -1056,22 +1070,29 @@ class FlutterOrchestratorGUI(ctk.CTk):
             self.log.sep()
             self.log.info("[3/5] Build local...")
             self._set_ci_mode("local")
-            self._set_status("Limpando projeto...", "#ffc107")
-            runner.flutter_cmd(["clean"], project, fail_on_error=False)
 
-            self._set_status("Baixando dependências...", "#ffc107")
-            self.log.info("flutter pub get")
-            if not runner.flutter_cmd(["pub", "get"], project):
-                self.log.warn("pub get falhou — tentando continuar...")
-            else:
+            try:
+                self._set_status("Limpando projeto...", "#ffc107")
+                runner.flutter_cmd(["clean"], project, fail_on_error=False)
+
+                self._set_status("Baixando dependências...", "#ffc107")
+                pub_ok = runner.flutter_cmd(["pub", "get"], project)
+                if not pub_ok:
+                    self.log.warn("pub get falhou — tentando build mesmo assim...")
+
                 build_flag = "--" + self.build_type.get()
                 self._set_status(f"Compilando APK {self.build_type.get()}...", "#ffc107")
-                self.log.info(f"flutter build apk {build_flag}")
                 if runner.flutter_cmd(["build", "apk", build_flag], project):
                     apk = self._find_apk(project)
                     if apk:
                         local_ok = True
                         self.log.ok("Build local concluído!")
+                    else:
+                        self.log.warn("Build terminou mas APK não foi encontrado")
+                else:
+                    self.log.warn("flutter build apk falhou")
+            except Exception as local_err:
+                self.log.warn(f"Exceção no build local: {local_err}")
 
             # ── ETAPA 4: Fallback CI ─────────────
             if not local_ok:
