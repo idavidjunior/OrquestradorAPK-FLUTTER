@@ -37,6 +37,7 @@ if HAS_GUI_SUPPORT:
     import time
     import zipfile
     import io
+    import queue
     from urllib.request import urlopen, Request
     from urllib.error import URLError
     from datetime import datetime
@@ -470,13 +471,15 @@ import 'package:flutter/material.dart';
             self.auto_install = tk.BooleanVar(value=True)
             self.auto_adb_install = tk.BooleanVar(value=True)
             self.github_token = tk.StringVar()
-            self.ci_token = tk.StringVar()   # token para o CI engine
+            self.ci_token = tk.StringVar()
             self.is_building = False
             self.last_apk_path = None
             self.work_dir = Path(tempfile.mkdtemp(prefix="flutter_orch_"))
+            self._log_queue = queue.Queue()   # fila thread-safe para logs
 
             self._build_ui()
             self._refresh_devices()
+            self._poll_log()   # inicia loop de drenagem da fila
 
         # ── UI ───────────────────────────────────
         def _build_ui(self):
@@ -600,23 +603,86 @@ import 'package:flutter/material.dart';
 
             # Indicador de modo ativo
             self.ci_mode_label = ctk.CTkLabel(
-                frame, text="● Local", text_color="#00cc66",
+                frame, text="● Aguardando", text_color="gray",
                 font=ctk.CTkFont(size=12, weight="bold")
             )
-            self.ci_mode_label.pack(side="left", padx=(0, 14))
+            self.ci_mode_label.pack(side="left", padx=(0, 10))
 
             ctk.CTkLabel(frame, text="Token GitHub:", text_color="gray").pack(side="left")
-            ctk.CTkEntry(
+            token_entry = ctk.CTkEntry(
                 frame, textvariable=self.ci_token,
-                placeholder_text="ghp_xxx... (necessário para fallback CI)",
-                show="*", width=320
-            ).pack(side="left", padx=8)
+                placeholder_text="ghp_xxx...",
+                show="*", width=280
+            )
+            token_entry.pack(side="left", padx=8)
 
-            ctk.CTkLabel(
-                frame,
-                text="Fallback automático para GitHub Actions se Flutter local falhar",
+            # Indicador de validade do token
+            self.token_status_label = ctk.CTkLabel(
+                frame, text="⬜ não validado",
                 text_color="gray", font=ctk.CTkFont(size=11)
-            ).pack(side="left", padx=8)
+            )
+            self.token_status_label.pack(side="left", padx=4)
+
+            # Botão validar
+            ctk.CTkButton(
+                frame, text="Validar", width=70,
+                command=self._validate_ci_token
+            ).pack(side="left", padx=4)
+
+            # Valida automaticamente quando sai do campo
+            token_entry.bind("<FocusOut>", lambda e: threading.Thread(
+                target=self._validate_ci_token, daemon=True).start())
+            token_entry.bind("<Return>", lambda e: threading.Thread(
+                target=self._validate_ci_token, daemon=True).start())
+
+        def _validate_ci_token(self):
+            """Valida o token GitHub contra a API e verifica acesso ao repo flutter-ci."""
+            token = self.ci_token.get().strip()
+            if not token:
+                self.after(0, lambda: self.token_status_label.configure(
+                    text="⬜ não validado", text_color="gray"))
+                return
+
+            self.after(0, lambda: self.token_status_label.configure(
+                text="🔄 validando...", text_color="#ffc107"))
+            try:
+                req = Request(
+                    "https://api.github.com/user",
+                    headers={
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github+json",
+                    }
+                )
+                with urlopen(req, timeout=10) as r:
+                    user = json.loads(r.read())
+                login = user.get("login", "?")
+
+                # Verifica acesso ao repo flutter-ci
+                req2 = Request(
+                    "https://api.github.com/repos/idavidjunior/flutter-ci",
+                    headers={
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github+json",
+                    }
+                )
+                with urlopen(req2, timeout=10) as r2:
+                    json.loads(r2.read())
+
+                self.after(0, lambda: self.token_status_label.configure(
+                    text=f"✅ válido ({login})", text_color="#00cc66"))
+                self.log_message(f"✅ Token GitHub válido — usuário: {login}", "success")
+
+            except Exception as e:
+                err = str(e)
+                if "401" in err:
+                    msg = "❌ token inválido"
+                elif "404" in err:
+                    msg = "❌ sem acesso ao flutter-ci"
+                else:
+                    msg = "❌ erro de conexão"
+                self.after(0, lambda m=msg: self.token_status_label.configure(
+                    text=m, text_color="#ff4444"))
+                self.log_message(f"❌ Validação do token falhou: {err}", "error")
 
         def _build_adb_section(self):
             frame = ctk.CTkFrame(self)
@@ -694,38 +760,32 @@ import 'package:flutter/material.dart';
                 self.folder_path.set(folder)
 
         # ── Logging ──────────────────────────────
+        # ── Logging (thread-safe via queue) ──────
         def log_message(self, message, level="info"):
-            """Log thread-safe via after()."""
-            prefix_map = {"error": "❌", "success": "✅", "warning": "⚠️", "info": "ℹ️"}
-            prefix = prefix_map.get(level, "•")
-            ts = datetime.now().strftime("%H:%M:%S")
-            line = f"[{ts}] {prefix} {message}\n"
+            """Pode ser chamado de qualquer thread — enfileira para o loop principal."""
+            self._log_queue.put((level, message))
 
-            def _insert():
-                try:
+        def _poll_log(self):
+            """Drena a fila de log no loop principal do tkinter a cada 50ms."""
+            prefix_map = {"error": "❌", "success": "✅", "warning": "⚠️", "info": "ℹ️"}
+            try:
+                while True:
+                    level, message = self._log_queue.get_nowait()
+                    prefix = prefix_map.get(level, "•")
+                    ts = datetime.now().strftime("%H:%M:%S")
                     self.log_text.configure(state="normal")
-                    self.log_text.insert("end", line)
+                    self.log_text.insert("end", f"[{ts}] {prefix} {message}\n")
                     self.log_text.see("end")
                     self.log_text.configure(state="disabled")
-                except Exception:
-                    pass
-
-            # Se chamado da thread principal, direto; senão agenda via after()
-            try:
-                self.after(0, _insert)
+            except queue.Empty:
+                pass
             except Exception:
                 pass
+            self.after(50, self._poll_log)
 
         def update_status(self, text, color="#4488ff"):
-            def _set():
-                try:
-                    self.status_label.configure(text=text, text_color=color)
-                except Exception:
-                    pass
-            try:
-                self.after(0, _set)
-            except Exception:
-                pass
+            """Thread-safe via after()."""
+            self.after(0, lambda: self.status_label.configure(text=text, text_color=color))
 
         # ── Build entry point ─────────────────────
         def start_build(self):
