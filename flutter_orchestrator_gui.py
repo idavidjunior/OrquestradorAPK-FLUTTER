@@ -871,13 +871,73 @@ import 'package:flutter/material.dart';
 
         # ── Helpers ───────────────────────────────
         def _check_flutter(self):
-            """Verifica se flutter está acessível no PATH atual."""
+            """Verifica se flutter está acessível — PATH, variáveis de ambiente e caminhos comuns."""
+            # 1. Tenta direto no PATH
             try:
-                r = subprocess.run(["flutter", "--version"],
-                                   capture_output=True, text=True, timeout=30)
-                return r.returncode == 0
+                r = subprocess.run(
+                    ["flutter", "--version"],
+                    capture_output=True, text=True, timeout=30,
+                    env=os.environ.copy()
+                )
+                if r.returncode == 0:
+                    return True
             except Exception:
-                return False
+                pass
+
+            # 2. Procura em variáveis de ambiente conhecidas (Flutter, Flutterbin, FLUTTER_ROOT)
+            for var in ("Flutter", "Flutterbin", "FLUTTER_ROOT", "FLUTTER_HOME"):
+                val = os.environ.get(var, "")
+                if not val:
+                    continue
+                for candidate in [
+                    Path(val) / "flutter.bat",
+                    Path(val) / "flutter",
+                    Path(val) / "bin" / "flutter.bat",
+                    Path(val) / "bin" / "flutter",
+                ]:
+                    if candidate.exists():
+                        try:
+                            r = subprocess.run(
+                                [str(candidate), "--version"],
+                                capture_output=True, text=True, timeout=30
+                            )
+                            if r.returncode == 0:
+                                # Injeta o bin no PATH para os próximos comandos
+                                flutter_bin = str(candidate.parent)
+                                os.environ["PATH"] = flutter_bin + os.pathsep + os.environ.get("PATH", "")
+                                self.log_message(f"✅ Flutter encontrado via variável {var}: {candidate}", "success")
+                                return True
+                        except Exception:
+                            pass
+
+            # 3. Caminhos comuns Windows / Linux / Mac
+            home = Path.home()
+            common = [
+                home / "flutter" / "bin" / "flutter.bat",
+                home / "flutter" / "bin" / "flutter",
+                Path("C:/flutter/bin/flutter.bat"),
+                Path("C:/src/flutter/bin/flutter.bat"),
+                home / ".flutter_orchestrator" / "flutter" / "bin" / "flutter.bat",
+                home / ".flutter_orchestrator" / "flutter" / "bin" / "flutter",
+                Path("/usr/local/flutter/bin/flutter"),
+                Path("/opt/flutter/bin/flutter"),
+            ]
+            for candidate in common:
+                if candidate.exists():
+                    try:
+                        r = subprocess.run(
+                            [str(candidate), "--version"],
+                            capture_output=True, text=True, timeout=30
+                        )
+                        if r.returncode == 0:
+                            flutter_bin = str(candidate.parent)
+                            os.environ["PATH"] = flutter_bin + os.pathsep + os.environ.get("PATH", "")
+                            self.log_message(f"✅ Flutter encontrado em: {candidate}", "success")
+                            return True
+                    except Exception:
+                        pass
+
+            return False
 
         def _ensure_flutter(self):
             """Garante que o Flutter está disponível. Instala se necessário e auto_install=True."""
