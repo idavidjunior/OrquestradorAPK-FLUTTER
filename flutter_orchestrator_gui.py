@@ -332,6 +332,41 @@ class ProjectSourceManager:
             log.warn("  Adicione manualmente ao pubspec.yaml se necessário")
 
     @staticmethod
+    def _analyse_code_issues(code: str, log: Logger) -> list[str]:
+        """
+        Detecta problemas conhecidos no código antes de compilar.
+        Retorna lista de avisos (não bloqueia o build).
+        """
+        warnings = []
+
+        # just_audio usa LoopMode, não RepeatMode
+        if "just_audio" in code and "RepeatMode" in code:
+            warnings.append(
+                "CONFLITO: 'RepeatMode' encontrado mas just_audio usa 'LoopMode'.\n"
+                "  Substitua RepeatMode.off → LoopMode.off\n"
+                "            RepeatMode.one → LoopMode.one\n"
+                "            RepeatMode.all → LoopMode.all\n"
+                "  E importe: import 'package:just_audio/just_audio.dart';\n"
+                "  Ref: https://pub.dev/packages/just_audio"
+            )
+
+        # AudioPlayer.setUrl foi removido em just_audio >= 0.9
+        if "just_audio" in code and ".setUrl(" in code:
+            warnings.append(
+                "AVISO: 'AudioPlayer.setUrl()' foi removido no just_audio >= 0.9.\n"
+                "  Use: await player.setAudioSource(AudioSource.uri(Uri.parse(url)));"
+            )
+
+        # shared_preferences: getInt/getString agora são síncronos
+        if "shared_preferences" in code and "await prefs.get" in code:
+            warnings.append(
+                "AVISO: SharedPreferences.getX() é síncrono desde v2.x.\n"
+                "  Remova o 'await' de prefs.getInt(), prefs.getString(), etc."
+            )
+
+        return warnings
+
+    @staticmethod
     def from_code(code: str, work_dir: Path, flutter_exe: str, log: Logger) -> Path:
         project_dir = work_dir / "pasted_project"
         if project_dir.exists():
@@ -751,8 +786,8 @@ class FlutterOrchestratorGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("🚀 Flutter Build Orchestrator")
-        self.geometry("1100x900")
-        self.minsize(960, 720)
+        self.geometry("1200x960")
+        self.minsize(1000, 750)
 
         self.build_type     = tk.StringVar(value="release")
         self.auto_install   = tk.BooleanVar(value=True)
@@ -779,7 +814,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
     def _build_ui(self):
         # Header
         hdr = ctk.CTkFrame(self, fg_color="transparent")
-        hdr.pack(fill="x", padx=20, pady=(14, 4))
+        hdr.pack(fill="x", padx=10, pady=(12, 4))
         ctk.CTkLabel(hdr, text="🚀 Flutter Build Orchestrator",
                      font=ctk.CTkFont(size=22, weight="bold")).pack(side="left")
         ctk.CTkLabel(hdr, text="compile · instale · entregue",
@@ -788,7 +823,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
         # Tabs de entrada
         self.tabview = ctk.CTkTabview(self, height=210)
-        self.tabview.pack(fill="x", padx=20, pady=(4, 0))
+        self.tabview.pack(fill="x", padx=10, pady=(4, 0))
         for tab in ("📋 Colar Código", "📁 Pasta / Diretório", "🔗 Link GitHub"):
             self.tabview.add(tab)
         self._tab_code()
@@ -808,30 +843,37 @@ class FlutterOrchestratorGUI(ctk.CTk):
             height=46, font=ctk.CTkFont(size=15, weight="bold"),
             fg_color="#28a745", hover_color="#218838"
         )
-        self.btn_build.pack(fill="x", padx=20, pady=(8, 2))
+        self.btn_build.pack(fill="x", padx=10, pady=(8, 2))
 
         # Progress + status
         self.progress = ctk.CTkProgressBar(self, mode="indeterminate")
-        self.progress.pack(fill="x", padx=20, pady=(0, 2))
+        self.progress.pack(fill="x", padx=10, pady=(0, 2))
         self.progress.set(0)
         self.lbl_status = ctk.CTkLabel(self, text="● Pronto", text_color="gray",
                                         font=ctk.CTkFont(size=12))
-        self.lbl_status.pack(anchor="w", padx=22)
+        self.lbl_status.pack(anchor="w", padx=14)
 
         # Log
         lf = ctk.CTkFrame(self)
-        lf.pack(fill="both", expand=True, padx=20, pady=(4, 12))
+        lf.pack(fill="both", expand=True, padx=10, pady=(4, 8))
         top = ctk.CTkFrame(lf, fg_color="transparent")
         top.pack(fill="x", padx=8, pady=(6, 2))
         ctk.CTkLabel(top, text="📋 Log em Tempo Real",
                      font=ctk.CTkFont(weight="bold")).pack(side="left")
-        ctk.CTkButton(top, text="Limpar", width=60, height=24,
+        # Botão abrir pasta de saída
+        self.btn_open_output = ctk.CTkButton(
+            top, text="📂 Abrir Pasta do APK", width=160, height=26,
+            command=self._open_output_folder, state="disabled",
+            fg_color="#1565C0", hover_color="#0D47A1"
+        )
+        self.btn_open_output.pack(side="right", padx=(6, 0))
+        ctk.CTkButton(top, text="🗑 Limpar", width=80, height=26,
                       command=self._clear_log).pack(side="right")
         self.log_box = ctk.CTkTextbox(
             lf, wrap="word", state="disabled",
             font=ctk.CTkFont(family="Courier New", size=12)
         )
-        self.log_box.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.log_box.pack(fill="both", expand=True, padx=4, pady=(0, 6))
 
         # Inicia o Logger (drena a fila via timer interno)
         self.log = Logger(self.log_box)
@@ -876,7 +918,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
     def _row_options(self):
         f = ctk.CTkFrame(self)
-        f.pack(fill="x", padx=20, pady=(6, 0))
+        f.pack(fill="x", padx=10, pady=(4, 0))
         ctk.CTkLabel(f, text="⚙️ Build:",
                      font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12)
         ctk.CTkRadioButton(f, text="📦 Release",
@@ -897,7 +939,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
     def _row_ci(self):
         f = ctk.CTkFrame(self)
-        f.pack(fill="x", padx=20, pady=(4, 0))
+        f.pack(fill="x", padx=10, pady=(4, 0))
         ctk.CTkLabel(f, text="☁️ CI:",
                      font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
         self.lbl_ci_mode = ctk.CTkLabel(
@@ -924,7 +966,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
     def _row_adb(self):
         f = ctk.CTkFrame(self)
-        f.pack(fill="x", padx=20, pady=(4, 0))
+        f.pack(fill="x", padx=10, pady=(4, 0))
         ctk.CTkLabel(f, text="📱 ADB:",
                      font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
 
@@ -954,6 +996,21 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self.btn_install.pack(side="left", padx=8)
 
     # ── Helpers UI ──────────────────────────────
+    def _open_output_folder(self):
+        """Abre a pasta que contém o último APK gerado."""
+        if not self.last_apk:
+            return
+        folder = str(Path(self.last_apk).parent)
+        try:
+            if platform.system() == "Windows":
+                os.startfile(folder)
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as e:
+            self.log.err(f"Não foi possível abrir a pasta: {e}")
+
     def _clear_log(self):
         self.log_box.configure(state="normal")
         self.log_box.delete("1.0", "end")
@@ -1159,6 +1216,19 @@ class FlutterOrchestratorGUI(ctk.CTk):
             # ── ETAPA 2: Resolver projeto ────────
             self.log.info("[2/5] Preparando projeto...")
             self._set_status("Preparando projeto...", "#ffc107")
+
+            # Análise prévia do código colado
+            if source_type == "code":
+                issues = ProjectSourceManager._analyse_code_issues(source_data, self.log)
+                if issues:
+                    self.log.sep()
+                    self.log.warn("⚠️  PROBLEMAS DETECTADOS NO CÓDIGO:")
+                    for issue in issues:
+                        for line in issue.split("\n"):
+                            self.log.warn(f"  {line}")
+                    self.log.warn("  O build continuará mas pode falhar por esses motivos.")
+                    self.log.sep()
+
             if source_type == "code":
                 project = ProjectSourceManager.from_code(
                     source_data, self.work_dir, cl.flutter_exe, self.log)
@@ -1228,6 +1298,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
             self.log.sep()
             self._set_status("✅ Build concluído!", "#00cc66")
             self.after(0, lambda: self.btn_install.configure(state="normal"))
+            self.after(0, lambda: self.btn_open_output.configure(state="normal"))
 
             if self.auto_adb.get():
                 serial = self._selected_serial()
