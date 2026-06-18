@@ -695,16 +695,37 @@ import 'package:flutter/material.dart';
 
         # ── Logging ──────────────────────────────
         def log_message(self, message, level="info"):
+            """Log thread-safe via after()."""
             prefix_map = {"error": "❌", "success": "✅", "warning": "⚠️", "info": "ℹ️"}
             prefix = prefix_map.get(level, "•")
             ts = datetime.now().strftime("%H:%M:%S")
-            self.log_text.configure(state="normal")
-            self.log_text.insert("end", f"[{ts}] {prefix} {message}\n")
-            self.log_text.see("end")
-            self.log_text.configure(state="disabled")
+            line = f"[{ts}] {prefix} {message}\n"
+
+            def _insert():
+                try:
+                    self.log_text.configure(state="normal")
+                    self.log_text.insert("end", line)
+                    self.log_text.see("end")
+                    self.log_text.configure(state="disabled")
+                except Exception:
+                    pass
+
+            # Se chamado da thread principal, direto; senão agenda via after()
+            try:
+                self.after(0, _insert)
+            except Exception:
+                pass
 
         def update_status(self, text, color="#4488ff"):
-            self.status_label.configure(text=text, text_color=color)
+            def _set():
+                try:
+                    self.status_label.configure(text=text, text_color=color)
+                except Exception:
+                    pass
+            try:
+                self.after(0, _set)
+            except Exception:
+                pass
 
         # ── Build entry point ─────────────────────
         def start_build(self):
@@ -751,79 +772,95 @@ import 'package:flutter/material.dart';
 
         # ── Build worker ──────────────────────────
         def _build_worker(self, source):
+            import traceback as _tb
             try:
                 start = datetime.now()
                 source_type, source_data = source
                 apk = None
 
+                self.log_message("━" * 55, "info")
+                self.log_message("🚀 INICIANDO PIPELINE DE BUILD", "info")
+                self.log_message(f"   Fonte : {source_type}", "info")
+                self.log_message(f"   Tipo  : {self.build_type.get()}", "info")
+                self.log_message(f"   Sistema: {platform.system()} {platform.release()}", "info")
+                self.log_message("━" * 55, "info")
+
                 # ── Tentativa LOCAL ───────────────────
+                self.log_message("🖥️ [ETAPA 1/5] Verificando Flutter local...", "info")
                 flutter_ok = self._check_flutter()
+                self.log_message(f"   Flutter no PATH: {'SIM' if flutter_ok else 'NÃO'}", "info")
 
                 if flutter_ok or self.auto_install.get():
-                    self.log_message("🖥️ Tentando build local...", "info")
                     self._set_ci_indicator("local")
                     try:
-                        # 1. Garantir Flutter
-                        self.update_status("Verificando Flutter...")
-                        if not self._ensure_flutter():
-                            raise Exception("Flutter indisponível localmente.")
+                        if not flutter_ok:
+                            self.log_message("🖥️ [ETAPA 1/5] Instalando Flutter...", "info")
+                            if not self._ensure_flutter():
+                                raise Exception("Flutter indisponível localmente.")
 
-                        # 2. Preparar projeto
+                        self.log_message("📁 [ETAPA 2/5] Preparando projeto...", "info")
                         self.update_status("Preparando projeto...")
                         project_path = self._resolve_project(source_type, source_data)
+                        self.log_message(f"   Projeto: {project_path}", "info")
 
-                        # 3. Clean + pub get + build
+                        self.log_message("🧹 [ETAPA 3/5] Limpando projeto...", "info")
                         self.update_status("Limpando projeto...")
-                        self._run_cmd(["flutter", "clean"], project_path)
+                        self._run_cmd(["flutter", "clean"], project_path, fail_on_error=False)
 
+                        self.log_message("📥 [ETAPA 4/5] Baixando dependências...", "info")
                         self.update_status("Baixando dependências...")
-                        self.log_message("📥 flutter pub get", "info")
                         if not self._run_cmd(["flutter", "pub", "get"], project_path):
-                            raise Exception("flutter pub get falhou")
+                            raise Exception("flutter pub get falhou — veja erros acima")
 
                         build_flag = "--" + self.build_type.get()
+                        self.log_message(f"🔨 [ETAPA 5/5] Compilando APK {self.build_type.get().upper()}...", "info")
                         self.update_status(f"Compilando APK ({self.build_type.get()})...")
-                        self.log_message(f"🔨 flutter build apk {build_flag}", "info")
                         if not self._run_cmd(["flutter", "build", "apk", build_flag], project_path):
-                            raise Exception("flutter build apk falhou")
+                            raise Exception("flutter build apk falhou — veja erros acima")
 
                         apk = self._find_apk(project_path, self.build_type.get())
                         if not apk:
-                            raise Exception("APK não encontrado após build local")
+                            raise Exception("APK não encontrado após build — verifique build/app/outputs/flutter-apk/")
 
-                        self.log_message("✅ Build local concluído.", "success")
+                        self.log_message("✅ Build local concluído com sucesso.", "success")
 
                     except Exception as local_err:
+                        self.log_message("━" * 55, "warning")
                         self.log_message(f"⚠️ Build local falhou: {local_err}", "warning")
-                        apk = None  # força fallback
+                        self.log_message(_tb.format_exc(), "warning")
+                        self.log_message("━" * 55, "warning")
+                        apk = None
 
                 # ── Fallback CI ───────────────────────
                 if not apk:
                     token = self.ci_token.get().strip()
                     if not token:
                         raise Exception(
-                            "Build local falhou e nenhum token GitHub configurado para fallback CI.\n"
-                            "Adicione seu token no campo ☁️ CI Remoto."
+                            "Build local falhou e nenhum token GitHub configurado.\n"
+                            "Preencha o campo ☁️ CI Remoto com seu token ghp_xxx para usar GitHub Actions."
                         )
 
-                    self.log_message("☁️ Ativando fallback: GitHub Actions...", "warning")
+                    self.log_message("━" * 55, "info")
+                    self.log_message("☁️ ATIVANDO FALLBACK: GitHub Actions", "warning")
+                    self.log_message("━" * 55, "info")
                     self._set_ci_indicator("ci")
 
-                    # Precisamos do projeto em disco para zipar
                     self.update_status("Preparando projeto para CI...")
                     project_path = self._resolve_project(source_type, source_data)
 
                     ci = CIEngine(token, self.log_message, self.update_status)
                     apk_path = ci.run_pipeline(project_path, self.build_type.get())
                     if not apk_path:
-                        raise Exception("Build via GitHub Actions falhou. Veja os logs acima.")
+                        raise Exception("Build via GitHub Actions também falhou. Veja os logs acima.")
                     apk = str(apk_path)
 
                 # ── Entrega ───────────────────────────
                 self.last_apk_path = apk
                 elapsed = datetime.now() - start
-                self.log_message(f"📦 APK: {apk}", "success")
+                self.log_message("━" * 55, "success")
+                self.log_message(f"📦 APK gerado : {apk}", "success")
                 self.log_message(f"⏱️ Tempo total: {elapsed}", "info")
+                self.log_message("━" * 55, "success")
                 self.update_status("✅ Build concluído!", "#00cc66")
                 self.install_btn.configure(state="normal")
 
@@ -835,7 +872,10 @@ import 'package:flutter/material.dart';
                         self.log_message("⚠️ Sem dispositivo ADB para instalação automática.", "warning")
 
             except Exception as e:
-                self.log_message(f"❌ {e}", "error")
+                self.log_message("━" * 55, "error")
+                self.log_message(f"❌ PIPELINE FALHOU: {e}", "error")
+                self.log_message(_tb.format_exc(), "error")
+                self.log_message("━" * 55, "error")
                 self.update_status("❌ Build falhou.", "#ff4444")
             finally:
                 self._set_ci_indicator("idle")
@@ -1032,20 +1072,63 @@ import 'package:flutter/material.dart';
                 return False
 
         def _run_cmd(self, cmd, cwd, fail_on_error=True):
+            """Executa comando com saída detalhada em tempo real (stdout + stderr separados)."""
+            import traceback as _tb
+            cmd_str = " ".join(str(c) for c in cmd)
+            self.log_message(f"▶ {cmd_str}", "info")
+            self.log_message(f"  📂 cwd: {cwd}", "info")
             try:
+                env = os.environ.copy()
                 proc = subprocess.Popen(
-                    cmd, cwd=str(cwd),
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1
+                    cmd,
+                    cwd=str(cwd),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env=env,
+                    encoding="utf-8",
+                    errors="replace",
                 )
-                for line in proc.stdout:
-                    line = line.strip()
-                    if line:
-                        self.log_message(line, "info")
+
+                # Lê stdout e stderr em threads para não bloquear
+                stdout_lines = []
+                stderr_lines = []
+
+                def _read(stream, store, level):
+                    for line in stream:
+                        line = line.rstrip()
+                        if line:
+                            store.append(line)
+                            self.log_message(line, level)
+
+                t_out = threading.Thread(target=_read, args=(proc.stdout, stdout_lines, "info"), daemon=True)
+                t_err = threading.Thread(target=_read, args=(proc.stderr, stderr_lines, "warning"), daemon=True)
+                t_out.start()
+                t_err.start()
+                t_out.join()
+                t_err.join()
                 proc.wait()
-                return proc.returncode == 0 or not fail_on_error
+
+                rc = proc.returncode
+                if rc == 0:
+                    self.log_message(f"✅ Comando concluído (exit 0)", "success")
+                    return True
+                else:
+                    self.log_message(f"❌ Comando falhou (exit {rc})", "error")
+                    if stderr_lines:
+                        self.log_message("── stderr completo ──", "error")
+                        for l in stderr_lines[-30:]:  # últimas 30 linhas de erro
+                            self.log_message(l, "error")
+                    return not fail_on_error
+
+            except FileNotFoundError:
+                self.log_message(f"❌ Executável não encontrado: {cmd[0]}", "error")
+                self.log_message(f"   PATH atual: {os.environ.get('PATH', 'N/A')}", "error")
+                return False
             except Exception as e:
-                self.log_message(f"Erro ao executar {cmd[0]}: {e}", "error")
+                self.log_message(f"❌ Exceção ao executar comando: {e}", "error")
+                self.log_message(_tb.format_exc(), "error")
                 return False
 
         @staticmethod
