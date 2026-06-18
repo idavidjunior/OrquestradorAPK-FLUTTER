@@ -668,7 +668,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self._checklist: Checklist | None = None   # resultado do último checklist
 
         self._build_ui()
-        self._refresh_devices()
+        self._poll_adb()   # detecção automática a cada 2s
         # Roda checklist automaticamente ao abrir
         threading.Thread(target=self._run_checklist, daemon=True).start()
 
@@ -821,14 +821,26 @@ class FlutterOrchestratorGUI(ctk.CTk):
         f.pack(fill="x", padx=20, pady=(4, 0))
         ctk.CTkLabel(f, text="📱 ADB:",
                      font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
+
+        # Indicador de status do dispositivo
+        self.lbl_adb_status = ctk.CTkLabel(
+            f, text="● Sem dispositivo", text_color="gray",
+            font=ctk.CTkFont(size=12, weight="bold"))
+        self.lbl_adb_status.pack(side="left", padx=(0, 10))
+
         self.menu_device = ctk.CTkOptionMenu(
             f, variable=self.device_var,
-            values=["Nenhum dispositivo"], width=230)
-        self.menu_device.pack(side="left", padx=6)
+            values=["Nenhum dispositivo"], width=220)
+        self.menu_device.pack(side="left", padx=4)
+
         ctk.CTkButton(f, text="🔄", width=36,
-                      command=self._refresh_devices).pack(side="left", padx=2)
+                      command=lambda: threading.Thread(
+                          target=self._refresh_devices, daemon=True).start()
+                      ).pack(side="left", padx=2)
+
         ctk.CTkCheckBox(f, text="Instalar auto após build",
                         variable=self.auto_adb).pack(side="left", padx=14)
+
         self.btn_install = ctk.CTkButton(
             f, text="📲 Instalar no Dispositivo", width=200,
             command=self._manual_install,
@@ -902,20 +914,51 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
     # ── ADB ─────────────────────────────────────
     def _refresh_devices(self):
-        self._adb_exe = ADBHelper.find_adb()
-        if not self._adb_exe:
-            self.menu_device.configure(values=["ADB não encontrado"])
-            self.device_var.set("ADB não encontrado")
-            self._devices = []
+        """Escaneia dispositivos ADB e atualiza UI. Pode ser chamado de qualquer thread."""
+        adb = ADBHelper.find_adb()
+        if not adb:
+            self._adb_exe = None
+            self.after(0, self._adb_ui_no_adb)
             return
-        self._devices = ADBHelper.list_devices(self._adb_exe)
-        if self._devices:
-            labels = [f"{m} ({s})" for s, m in self._devices]
-            self.menu_device.configure(values=labels)
-            self.device_var.set(labels[0])
+
+        self._adb_exe = adb
+        devices = ADBHelper.list_devices(adb)
+        prev_count = len(self._devices)
+        self._devices = devices
+
+        if devices:
+            labels = [f"{m}  ({s})" for s, m in devices]
+            def _update_connected():
+                self.menu_device.configure(values=labels)
+                self.device_var.set(labels[0])
+                self.lbl_adb_status.configure(
+                    text=f"● {len(devices)} dispositivo(s)",
+                    text_color="#00cc66")
+            self.after(0, _update_connected)
+            # Loga apenas quando novo dispositivo conectar
+            if len(devices) > prev_count:
+                for serial, model in devices:
+                    self.log.ok(f"Dispositivo conectado: {model} ({serial})")
         else:
-            self.menu_device.configure(values=["Nenhum dispositivo conectado"])
-            self.device_var.set("Nenhum dispositivo conectado")
+            self.after(0, self._adb_ui_no_device)
+            # Loga apenas quando desconectar
+            if prev_count > 0:
+                self.log.warn("Dispositivo desconectado")
+
+    def _adb_ui_no_adb(self):
+        self.menu_device.configure(values=["ADB não encontrado"])
+        self.device_var.set("ADB não encontrado")
+        self.lbl_adb_status.configure(text="● ADB ausente", text_color="#ff4444")
+
+    def _adb_ui_no_device(self):
+        self.menu_device.configure(values=["Nenhum dispositivo conectado"])
+        self.device_var.set("Nenhum dispositivo conectado")
+        self.lbl_adb_status.configure(text="● Sem dispositivo", text_color="gray")
+
+    def _poll_adb(self):
+        """Verifica dispositivos a cada 2s em background — detecção automática."""
+        threading.Thread(target=self._refresh_devices, daemon=True).start()
+        self.after(2000, self._poll_adb)
 
     def _selected_serial(self) -> str | None:
         label = self.device_var.get()
