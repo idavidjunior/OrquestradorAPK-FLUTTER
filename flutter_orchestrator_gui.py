@@ -243,6 +243,94 @@ class Checklist:
 # ─────────────────────────────────────────────────────────────
 class ProjectSourceManager:
 
+    # Mapa de package → versão estável conhecida
+    KNOWN_PACKAGES = {
+        "path_provider":        "^2.1.4",
+        "shared_preferences":   "^2.3.2",
+        "just_audio":           "^0.9.40",
+        "http":                 "^1.2.2",
+        "provider":             "^6.1.2",
+        "get":                  "^4.6.6",
+        "dio":                  "^5.7.0",
+        "cached_network_image": "^3.4.1",
+        "flutter_bloc":         "^8.1.6",
+        "sqflite":              "^2.3.3",
+        "hive":                 "^2.2.3",
+        "hive_flutter":         "^1.1.0",
+        "image_picker":         "^1.1.2",
+        "permission_handler":   "^11.3.1",
+        "url_launcher":         "^6.3.0",
+        "connectivity_plus":    "^6.1.0",
+        "intl":                 "^0.19.0",
+        "lottie":               "^3.1.2",
+        "flutter_svg":          "^2.0.10",
+        "google_fonts":         "^6.2.1",
+        "audioplayers":         "^6.1.0",
+        "camera":               "^0.11.0",
+        "geolocator":           "^13.0.1",
+        "firebase_core":        "^3.6.0",
+        "firebase_auth":        "^5.3.1",
+        "cloud_firestore":      "^5.4.3",
+        "video_player":         "^2.9.1",
+        "animations":           "^2.0.11",
+        "flutter_animate":      "^4.5.0",
+        "rxdart":               "^0.28.0",
+        "equatable":            "^2.0.5",
+        "freezed_annotation":   "^2.4.4",
+        "json_annotation":      "^4.9.0",
+        "path":                 "^1.9.0",
+        "uuid":                 "^4.5.1",
+        "crypto":               "^3.0.5",
+        "collection":           "^1.19.0",
+        "flutter_localizations": None,   # SDK package
+        "flutter_test":          None,   # SDK dev package
+    }
+
+    @staticmethod
+    def _detect_and_inject_deps(code: str, project_dir: Path, log: Logger):
+        """Lê imports do código e injeta dependências no pubspec.yaml."""
+        # Extrai todos os package imports
+        imports = re.findall(r"import\s+'package:([^/]+)/", code)
+        imports += re.findall(r'import\s+"package:([^/]+)/', code)
+        packages = set(imports) - {"flutter", "flutter_test", "flutter_localizations",
+                                    "flutter_app_generated"}
+
+        if not packages:
+            log.info("Nenhuma dependência extra detectada no código")
+            return
+
+        log.info(f"Dependências detectadas no código: {', '.join(sorted(packages))}")
+
+        pubspec_path = project_dir / "pubspec.yaml"
+        pubspec = pubspec_path.read_text(encoding="utf-8")
+
+        added = []
+        unknown = []
+        for pkg in sorted(packages):
+            if pkg in pubspec:
+                log.info(f"  já presente: {pkg}")
+                continue
+            version = ProjectSourceManager.KNOWN_PACKAGES.get(pkg)
+            if version is None and pkg in ProjectSourceManager.KNOWN_PACKAGES:
+                # SDK package — pula
+                continue
+            if version:
+                # Injeta antes da linha 'flutter:'
+                entry = f"  {pkg}: {version}\n"
+                pubspec = pubspec.replace(
+                    "\nflutter:\n", f"\n  {pkg}: {version}\nflutter:\n", 1)
+                added.append(f"{pkg}: {version}")
+            else:
+                unknown.append(pkg)
+
+        pubspec_path.write_text(pubspec, encoding="utf-8")
+
+        if added:
+            log.ok(f"Dependências injetadas no pubspec.yaml: {', '.join(added)}")
+        if unknown:
+            log.warn(f"Pacotes desconhecidos (versão não mapeada): {', '.join(unknown)}")
+            log.warn("  Adicione manualmente ao pubspec.yaml se necessário")
+
     @staticmethod
     def from_code(code: str, work_dir: Path, flutter_exe: str, log: Logger) -> Path:
         project_dir = work_dir / "pasted_project"
@@ -296,6 +384,9 @@ class ProjectSourceManager:
         )
         main_dart.write_text(content, encoding="utf-8")
         log.ok(f"Projeto criado com sucesso. main.dart substituído ({len(content)} chars)")
+
+        # Detecta e injeta dependências do código no pubspec.yaml
+        ProjectSourceManager._detect_and_inject_deps(code, project_dir, log)
         return project_dir
 
     @staticmethod
@@ -417,7 +508,10 @@ class CIEngine:
                        headers={**self._hdrs, "Content-Type": "application/json"},
                        method=method)
         with urlopen(req, timeout=30) as r:
-            return json.loads(r.read())
+            raw = r.read()
+            if not raw.strip():
+                return {}          # 204 No Content — resposta vazia é OK
+            return json.loads(raw)
 
     def _upload_project(self, project_path: Path, session_id: str) -> str:
         self.log.info("Empacotando projeto para CI...")
@@ -657,8 +751,8 @@ class FlutterOrchestratorGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("🚀 Flutter Build Orchestrator")
-        self.geometry("1020x800")
-        self.minsize(900, 680)
+        self.geometry("1100x900")
+        self.minsize(960, 720)
 
         self.build_type     = tk.StringVar(value="release")
         self.auto_install   = tk.BooleanVar(value=True)
@@ -693,7 +787,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
                          side="left", padx=10, pady=(4, 0))
 
         # Tabs de entrada
-        self.tabview = ctk.CTkTabview(self, height=230)
+        self.tabview = ctk.CTkTabview(self, height=210)
         self.tabview.pack(fill="x", padx=20, pady=(4, 0))
         for tab in ("📋 Colar Código", "📁 Pasta / Diretório", "🔗 Link GitHub"):
             self.tabview.add(tab)
@@ -735,7 +829,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
                       command=self._clear_log).pack(side="right")
         self.log_box = ctk.CTkTextbox(
             lf, wrap="word", state="disabled",
-            font=ctk.CTkFont(family="Courier New", size=11)
+            font=ctk.CTkFont(family="Courier New", size=12)
         )
         self.log_box.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
@@ -793,6 +887,9 @@ class FlutterOrchestratorGUI(ctk.CTk):
                                side="left", padx=10)
         ctk.CTkCheckBox(f, text="Instalar Flutter automaticamente",
                         variable=self.auto_install).pack(side="left", padx=20)
+        self.lbl_flutter_status = ctk.CTkLabel(
+            f, text="", text_color="gray", font=ctk.CTkFont(size=11))
+        self.lbl_flutter_status.pack(side="left", padx=4)
         ctk.CTkButton(f, text="🔍 Verificar Ambiente", width=160,
                       command=lambda: threading.Thread(
                           target=self._run_checklist, daemon=True).start()
@@ -886,8 +983,17 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self._checklist = cl
         if ok:
             self._set_status("● Ambiente OK — pronto para build", "#00cc66")
+            # Atualiza indicador do Flutter
+            if cl.flutter_exe:
+                self.after(0, lambda: self.lbl_flutter_status.configure(
+                    text="✅ Flutter detectado", text_color="#00cc66"))
+                # Desativa auto-install visualmente (já tem Flutter)
+                self.after(0, lambda: self.auto_install.set(False))
         else:
             self._set_status("● Pré-requisito faltando — veja o log", "#ff4444")
+            if not cl.flutter_exe:
+                self.after(0, lambda: self.lbl_flutter_status.configure(
+                    text="⚠️ não encontrado — auto-install ativo", text_color="#ffc107"))
 
     # ── Token validation ────────────────────────
     def _validate_token(self):
