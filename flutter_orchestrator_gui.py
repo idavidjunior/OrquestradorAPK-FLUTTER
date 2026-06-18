@@ -246,20 +246,52 @@ class ProjectSourceManager:
             shutil.rmtree(project_dir)
 
         log.info("Criando projeto Flutter para código colado...")
-        r = subprocess.run(
-            [flutter_exe, "create", "--project-name", "flutter_app_generated",
-             "--org", "com.orchestrator", str(project_dir)],
-            capture_output=True, text=True, timeout=120, env=os.environ.copy()
-        )
-        if r.returncode != 0:
-            raise Exception(f"flutter create falhou:\n{r.stderr or r.stdout}")
+        log.info(f"  Destino: {project_dir}")
+        log.info("  (Primeira execução pode levar alguns minutos — aguarde)")
+
+        cmd = [flutter_exe, "create",
+               "--project-name", "flutter_app_generated",
+               "--org", "com.orchestrator",
+               str(project_dir)]
+        log.info(f"  ▶ {' '.join(cmd)}")
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=os.environ.copy(),
+            )
+
+            # Lê saída em tempo real — evita bloqueio de buffer no Windows
+            deadline = time.time() + 600  # 10 min
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    log.info(line)
+                if time.time() > deadline:
+                    proc.kill()
+                    raise Exception("flutter create excedeu 10 minutos")
+
+            proc.wait()
+            if proc.returncode != 0:
+                raise Exception(f"flutter create falhou (exit {proc.returncode})")
+
+        except Exception as e:
+            raise Exception(f"flutter create: {e}")
+
+        if not (project_dir / "pubspec.yaml").exists():
+            raise Exception(f"Projeto não foi criado corretamente em {project_dir}")
 
         main_dart = project_dir / "lib" / "main.dart"
         content = code if "void main(" in code else (
             "import 'package:flutter/material.dart';\n\n" + code
         )
         main_dart.write_text(content, encoding="utf-8")
-        log.ok(f"main.dart substituído ({len(content)} chars)")
+        log.ok(f"Projeto criado com sucesso. main.dart substituído ({len(content)} chars)")
         return project_dir
 
     @staticmethod
@@ -281,12 +313,19 @@ class ProjectSourceManager:
         if dest.exists():
             shutil.rmtree(dest)
         log.info(f"Clonando: {url}")
-        r = subprocess.run(
+
+        proc = subprocess.Popen(
             ["git", "clone", "--depth", "1", clone_url, str(dest)],
-            capture_output=True, text=True, timeout=300
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
         )
-        if r.returncode != 0:
-            raise Exception(f"git clone falhou:\n{r.stderr or r.stdout}")
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                log.info(line)
+        proc.wait()
+        if proc.returncode != 0:
+            raise Exception(f"git clone falhou (exit {proc.returncode})")
         if not (dest / "pubspec.yaml").exists():
             raise Exception("Repositório não contém pubspec.yaml")
         log.ok(f"Clonado em: {dest}")
