@@ -239,6 +239,120 @@ class Checklist:
 
 
 # ─────────────────────────────────────────────────────────────
+#  Gemini Code Fixer — corrige código Dart com IA
+# ─────────────────────────────────────────────────────────────
+class GeminiCodeFixer:
+    """
+    Usa a API Gemini para analisar erros do compilador Dart,
+    corrigir o código e retornar o código corrigido com explicações.
+    """
+    API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+    def __init__(self, api_key: str, log: Logger):
+        self.api_key = api_key
+        self.log = log
+
+    def fix(self, code: str, errors: list[str]) -> str | None:
+        """
+        Envia código + erros para o Gemini e retorna código corrigido.
+        Retorna None se falhar.
+        """
+        if not self.api_key:
+            return None
+
+        error_text = "\n".join(errors[:60])  # máx 60 linhas de erro
+
+        prompt = f"""Você é um especialista em Flutter/Dart.
+O código abaixo falhou ao compilar com os erros listados.
+
+ERROS DO COMPILADOR:
+{error_text}
+
+CÓDIGO DART (main.dart):
+```dart
+{code}
+```
+
+TAREFA:
+1. Analise cada erro e corrija o código
+2. Mantenha a lógica e funcionalidade originais intactas
+3. Corrija apenas o que é necessário para compilar
+4. Retorne APENAS o código Dart corrigido, sem explicações antes ou depois
+5. Não inclua marcadores de código (``` ou ```dart) na resposta
+6. Logo abaixo do import inicial, adicione um comentário com as correções feitas:
+   // CORREÇÕES APLICADAS:
+   // - [descrição curta de cada correção]
+
+IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void main."""
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 8192,
+            }
+        }
+
+        try:
+            self.log.info("🤖 Enviando código para Gemini analisar e corrigir...")
+            url = f"{self.API_URL}?key={self.api_key}"
+            req = Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urlopen(req, timeout=60) as r:
+                resp = json.loads(r.read())
+
+            # Extrai o texto da resposta
+            fixed_code = (resp.get("candidates", [{}])[0]
+                             .get("content", {})
+                             .get("parts", [{}])[0]
+                             .get("text", "")).strip()
+
+            if not fixed_code:
+                self.log.err("Gemini retornou resposta vazia")
+                return None
+
+            # Remove marcadores de código se Gemini os incluiu mesmo assim
+            if fixed_code.startswith("```"):
+                lines = fixed_code.split("\n")
+                fixed_code = "\n".join(
+                    l for l in lines
+                    if not l.strip().startswith("```")
+                ).strip()
+
+            self.log.ok("🤖 Gemini retornou código corrigido")
+            return fixed_code
+
+        except Exception as e:
+            self.log.err(f"🤖 Gemini API falhou: {e}")
+            return None
+
+    @staticmethod
+    def validate_key(api_key: str) -> tuple[bool, str]:
+        """Valida a chave Gemini com uma chamada mínima."""
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+            req = Request(url, headers={"Content-Type": "application/json"})
+            with urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+            models = [m.get("name", "") for m in data.get("models", [])]
+            gemini = [m for m in models if "gemini" in m.lower()]
+            if gemini:
+                return True, f"OK — {len(gemini)} modelos Gemini disponíveis"
+            return False, "Chave válida mas sem modelos Gemini"
+        except Exception as e:
+            err = str(e)
+            if "400" in err or "API_KEY_INVALID" in err:
+                return False, "Chave inválida"
+            if "403" in err:
+                return False, "Sem permissão — verifique a chave"
+            return False, f"Erro de conexão: {err}"
+
+
+# ─────────────────────────────────────────────────────────────
 #  Project Source Manager
 # ─────────────────────────────────────────────────────────────
 class ProjectSourceManager:
@@ -777,6 +891,54 @@ class BuildRunner:
     def flutter_cmd(self, args: list[str], cwd: Path, fail_on_error=True) -> bool:
         return self.run([self.flutter] + args, cwd, fail_on_error)
 
+    def flutter_cmd_with_errors(self, args: list[str], cwd: Path) -> tuple[bool, list[str]]:
+        """Como flutter_cmd mas retorna (sucesso, lista_de_erros)."""
+        cmd = [self.flutter] + args
+        cmd_str = " ".join(str(c) for c in cmd)
+        self.log.info(f"▶ {cmd_str}")
+        self.log.info(f"  em: {cwd}")
+        all_errors: list[str] = []
+        try:
+            env = os.environ.copy()
+            env["FLUTTER_SUPPRESS_ANALYTICS"] = "true"
+            proc = subprocess.Popen(
+                cmd, cwd=str(cwd),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            stdout_lines, stderr_lines = [], []
+
+            def _read(stream, store, level):
+                for raw in stream:
+                    try:
+                        line = raw.decode("utf-8", errors="replace").rstrip()
+                    except Exception:
+                        line = repr(raw)
+                    if line:
+                        store.append(line)
+                        self.log.put(line, level)
+
+            t1 = threading.Thread(target=_read,
+                                  args=(proc.stdout, stdout_lines, "info"), daemon=True)
+            t2 = threading.Thread(target=_read,
+                                  args=(proc.stderr, stderr_lines, "warn"), daemon=True)
+            t1.start(); t2.start()
+            t1.join();  t2.join()
+            proc.wait()
+
+            all_errors = [l for l in (stdout_lines + stderr_lines)
+                          if "Error:" in l or "error:" in l.lower()
+                          or "FAILURE" in l or "failed" in l.lower()]
+
+            if proc.returncode == 0:
+                self.log.ok("Concluído (exit 0)")
+                return True, []
+            else:
+                self.log.err(f"Falhou (exit {proc.returncode})")
+                return False, all_errors
+
+        except Exception as e:
+            self.log.err(f"Exceção: {e}")
+            return False, [str(e)]
+
 
 # ─────────────────────────────────────────────────────────────
 #  Main GUI
@@ -794,6 +956,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self.auto_adb       = tk.BooleanVar(value=True)
         self.github_token   = tk.StringVar()
         self.ci_token       = tk.StringVar()
+        self.gemini_key     = tk.StringVar()
         self.folder_path    = tk.StringVar()
         self.github_url     = tk.StringVar()
         self.device_var     = tk.StringVar(value="Nenhum dispositivo")
@@ -834,6 +997,8 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self._row_options()
         # CI
         self._row_ci()
+        # Gemini
+        self._row_gemini()
         # ADB
         self._row_adb()
 
@@ -936,6 +1101,52 @@ class FlutterOrchestratorGUI(ctk.CTk):
                       command=lambda: threading.Thread(
                           target=self._run_checklist, daemon=True).start()
                       ).pack(side="right", padx=12)
+
+    def _row_gemini(self):
+        f = ctk.CTkFrame(self)
+        f.pack(fill="x", padx=10, pady=(4, 0))
+        ctk.CTkLabel(f, text="🤖 Gemini:",
+                     font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
+        ctk.CTkLabel(f, text="API Key:", text_color="gray").pack(side="left")
+        key_entry = ctk.CTkEntry(
+            f, textvariable=self.gemini_key,
+            placeholder_text="AIza... (corrige código automaticamente)",
+            show="*", width=320)
+        key_entry.pack(side="left", padx=8)
+        self.lbl_gemini_status = ctk.CTkLabel(
+            f, text="⬜ não configurado", text_color="gray",
+            font=ctk.CTkFont(size=11))
+        self.lbl_gemini_status.pack(side="left", padx=4)
+        ctk.CTkButton(f, text="Validar", width=70,
+                      command=lambda: threading.Thread(
+                          target=self._validate_gemini_key, daemon=True).start()
+                      ).pack(side="left", padx=4)
+        ctk.CTkLabel(f,
+                     text="Se configurado: corrige erros de compilação automaticamente",
+                     text_color="gray", font=ctk.CTkFont(size=10)
+                     ).pack(side="left", padx=10)
+        key_entry.bind("<FocusOut>", lambda e: threading.Thread(
+            target=self._validate_gemini_key, daemon=True).start())
+        key_entry.bind("<Return>", lambda e: threading.Thread(
+            target=self._validate_gemini_key, daemon=True).start())
+
+    def _validate_gemini_key(self):
+        key = self.gemini_key.get().strip()
+        if not key:
+            self.after(0, lambda: self.lbl_gemini_status.configure(
+                text="⬜ não configurado", text_color="gray"))
+            return
+        self.after(0, lambda: self.lbl_gemini_status.configure(
+            text="🔄 validando...", text_color="#ffc107"))
+        ok, msg = GeminiCodeFixer.validate_key(key)
+        color = "#00cc66" if ok else "#ff4444"
+        icon  = "✅" if ok else "❌"
+        self.after(0, lambda m=msg: self.lbl_gemini_status.configure(
+            text=f"{icon} {m}", text_color=color))
+        if ok:
+            self.log.ok(f"🤖 Gemini API válida: {msg}")
+        else:
+            self.log.err(f"🤖 Gemini API inválida: {msg}")
 
     def _row_ci(self):
         f = ctk.CTkFrame(self)
@@ -1241,6 +1452,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
             apk = None
             local_ok = False
+            build_errors: list[str] = []
 
             # ── ETAPA 3: Build local ─────────────
             self.log.sep()
@@ -1258,7 +1470,10 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
                 build_flag = "--" + self.build_type.get()
                 self._set_status(f"Compilando APK {self.build_type.get()}...", "#ffc107")
-                if runner.flutter_cmd(["build", "apk", build_flag], project):
+                build_ok, build_errors = runner.flutter_cmd_with_errors(
+                    ["build", "apk", build_flag], project)
+
+                if build_ok:
                     apk = self._find_apk(project)
                     if apk:
                         local_ok = True
@@ -1267,8 +1482,62 @@ class FlutterOrchestratorGUI(ctk.CTk):
                         self.log.warn("Build terminou mas APK não foi encontrado")
                 else:
                     self.log.warn("flutter build apk falhou")
+
             except Exception as local_err:
                 self.log.warn(f"Exceção no build local: {local_err}")
+
+            # ── ETAPA 3b: Correção automática com Gemini ──
+            if not local_ok and source_type == "code" and build_errors:
+                gemini_key = self.gemini_key.get().strip()
+                if gemini_key:
+                    self.log.sep()
+                    self.log.info("[3b] 🤖 Tentando correção automática com Gemini...")
+                    self._set_status("🤖 Gemini corrigindo código...", "#9c27b0")
+
+                    current_code = (project / "lib" / "main.dart").read_text(
+                        encoding="utf-8", errors="replace")
+                    fixer = GeminiCodeFixer(gemini_key, self.log)
+                    fixed_code = fixer.fix(current_code, build_errors)
+
+                    if fixed_code:
+                        # Salva código corrigido
+                        main_dart = project / "lib" / "main.dart"
+                        main_dart.write_text(fixed_code, encoding="utf-8")
+                        self.log.ok("🤖 Código corrigido pelo Gemini — recompilando...")
+
+                        # Exibe resumo das correções (linhas de comentário // CORREÇÕES)
+                        for line in fixed_code.split("\n"):
+                            if "CORREÇÕES" in line or line.strip().startswith("// -"):
+                                self.log.info(f"  {line.strip()}")
+
+                        # Tenta build novamente com código corrigido
+                        self._set_status("Recompilando após correção...", "#9c27b0")
+                        runner.flutter_cmd(["clean"], project, fail_on_error=False)
+                        runner.flutter_cmd(["pub", "get"], project)
+                        build_ok2, _ = runner.flutter_cmd_with_errors(
+                            ["build", "apk", build_flag], project)
+
+                        if build_ok2:
+                            apk = self._find_apk(project)
+                            if apk:
+                                local_ok = True
+                                self.log.ok("🤖 Build concluído após correção do Gemini!")
+                        if not local_ok:
+                            self.log.warn("🤖 Correção do Gemini não resolveu — indo para CI...")
+                    else:
+                        self.log.warn("🤖 Gemini não retornou correção válida")
+                else:
+                    # Sem Gemini: mostra erros detalhados para o usuário corrigir
+                    self.log.sep()
+                    self.log.warn("━━━ ERROS QUE IMPEDEM A COMPILAÇÃO ━━━")
+                    self.log.warn("Configure a API Key do Gemini para correção automática")
+                    self.log.warn("Ou corrija manualmente os erros abaixo:")
+                    self.log.sep()
+                    dart_errors = [e for e in build_errors
+                                   if "Error:" in e or "error:" in e.lower()]
+                    for err in dart_errors[:40]:
+                        self.log.err(err)
+                    self.log.sep()
 
             # ── ETAPA 4: Fallback CI ─────────────
             if not local_ok:
