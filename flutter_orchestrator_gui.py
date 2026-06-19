@@ -882,10 +882,107 @@ class ProjectSourceManager:
         return code, fixes
 
     @staticmethod
+    def _extract_dart_code(code: str, log: Logger) -> tuple[str, dict]:
+        """
+        Extrai apenas o código Dart válido, removendo conteúdos de outros arquivos
+        (pubspec.yaml, AndroidManifest.xml, etc.) que foram colados junto.
+        
+        Retorna: (codigo_dart_limpo, dicionario_com_outros_arquivos)
+        """
+        others = {"pubspec_lines": [], "manifest_lines": [], "gradle_lines": []}
+        dart_lines = []
+        
+        in_yaml = False
+        in_xml = False
+        in_gradle = False
+        yaml_indent_base = None
+        
+        for line in code.split('\n'):
+            stripped = line.strip()
+            
+            # Detecta início de pubspec.yaml (chave: valor no início da linha)
+            if not in_xml and not in_gradle:
+                if re.match(r'^(name|description|version|environment|dependencies|dev_dependencies|flutter):\s*', stripped):
+                    in_yaml = True
+                    yaml_indent_base = len(line) - len(line.lstrip())
+                    others["pubspec_lines"].append(line)
+                    continue
+                # Detecta início de AndroidManifest.xml
+                elif stripped.startswith('<uses-permission') or stripped.startswith('<application') or stripped.startswith('<manifest'):
+                    in_xml = True
+                    others["manifest_lines"].append(line)
+                    continue
+                # Detecta início de build.gradle
+                elif re.match(r'^(plugins|android|compileSdkVersion|defaultConfig)\s*[\{:]?', stripped):
+                    in_gradle = True
+                    others["gradle_lines"].append(line)
+                    continue
+            
+            # Se já está em YAML
+            if in_yaml:
+                current_indent = len(line) - len(line.lstrip()) if line.strip() else 0
+                # Sai do YAML se encontrar uma linha vazia seguida de código Dart
+                if stripped == '' or (current_indent <= (yaml_indent_base or 0) and re.match(r'^(import|class|void|final|var|const|enum|@)', stripped)):
+                    if re.match(r'^(import|class|void|final|var|const|enum|@)', stripped):
+                        in_yaml = False
+                        dart_lines.append(line)
+                        continue
+                    elif stripped == '':
+                        # Linha vazia pode ser fim do YAML ou apenas espaçamento
+                        # Verifica próximas linhas antes de decidir
+                        others["pubspec_lines"].append(line)
+                        continue
+                else:
+                    others["pubspec_lines"].append(line)
+                    continue
+            
+            # Se já está em XML
+            if in_xml:
+                if stripped.startswith('</manifest>') or (stripped.startswith('import ') and 'package:' in stripped):
+                    in_xml = False
+                    if stripped.startswith('import '):
+                        dart_lines.append(line)
+                        continue
+                others["manifest_lines"].append(line)
+                continue
+            
+            # Se já está em Gradle
+            if in_gradle:
+                if stripped.startswith('}') or re.match(r'^(import|class|void|final|var|const|enum|@)', stripped):
+                    in_gradle = False
+                    if re.match(r'^(import|class|void|final|var|const|enum|@)', stripped):
+                        dart_lines.append(line)
+                        continue
+                others["gradle_lines"].append(line)
+                continue
+            
+            # Código normal (Dart)
+            dart_lines.append(line)
+        
+        # Converte listas de volta para string
+        for key in others:
+            others[key] = '\n'.join(others[key])
+        
+        dart_code = '\n'.join(dart_lines)
+        
+        # Log do que foi encontrado
+        if others["pubspec_lines"]:
+            log.warn(f"📝 Conteúdo de pubspec.yaml detectado e removido ({len(others['pubspec_lines'].split(chr(10)))} linhas)")
+        if others["manifest_lines"]:
+            log.warn(f"📝 Conteúdo de AndroidManifest.xml detectado e removido ({len(others['manifest_lines'].split(chr(10)))} linhas)")
+        if others["gradle_lines"]:
+            log.warn(f"📝 Conteúdo de build.gradle detectado e removido")
+        
+        return dart_code, others
+
+    @staticmethod
     def from_code(code: str, work_dir: Path, flutter_exe: str, log: Logger,
                   kb=None) -> Path:
         # Aplica correções estáticas conhecidas antes de criar o projeto
         code, _ = ProjectSourceManager._apply_static_fixes(code, log)
+        
+        # Extrai apenas o código Dart válido, separando outros arquivos
+        dart_code, other_files = ProjectSourceManager._extract_dart_code(code, log)
 
         project_dir = work_dir / "pasted_project"
         if project_dir.exists():
@@ -933,15 +1030,29 @@ class ProjectSourceManager:
             raise Exception(f"Projeto não foi criado corretamente em {project_dir}")
 
         main_dart = project_dir / "lib" / "main.dart"
-        content = code if "void main(" in code else (
-            "import 'package:flutter/material.dart';\n\n" + code
+        content = dart_code if "void main(" in dart_code else (
+            "import 'package:flutter/material.dart';\n\n" + dart_code
         )
         main_dart.write_text(content, encoding="utf-8")
         log.ok(f"Projeto criado com sucesso. main.dart substituído ({len(content)} chars)")
 
         # Detecta e injeta dependências do código no pubspec.yaml
         # kb é passado opcionalmente via from_code se disponível
-        ProjectSourceManager._detect_and_inject_deps(code, project_dir, log, kb=kb)
+        ProjectSourceManager._detect_and_inject_deps(dart_code, project_dir, log, kb=kb)
+        
+        # Processa arquivos extras extraídos (pubspec.yaml, AndroidManifest.xml)
+        if other_files.get("pubspec_lines"):
+            log.info("📝 Mesclando dependências do pubspec.yaml extraído...")
+            # TODO: Implementar merge de dependências do pubspec extraído
+        if other_files.get("manifest_lines"):
+            log.info("📝 Permissões do AndroidManifest detectadas:")
+            for line in other_files["manifest_lines"].split('\n'):
+                if 'uses-permission' in line:
+                    log.info(f"    {line.strip()}")
+            # TODO: Injetar permissões no AndroidManifest.xml do projeto
+        if other_files.get("gradle_lines"):
+            log.info("📝 Configurações Gradle detectadas — podem exigir ajuste manual")
+        
         return project_dir
 
     @staticmethod
