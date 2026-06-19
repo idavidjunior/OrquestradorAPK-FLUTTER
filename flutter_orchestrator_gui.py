@@ -239,6 +239,226 @@ class Checklist:
 
 
 # ─────────────────────────────────────────────────────────────
+#  Knowledge Base — cérebro que aprende
+# ─────────────────────────────────────────────────────────────
+class KnowledgeBase:
+    """
+    Carrega known_fixes.json, aplica correções conhecidas ao código,
+    e aprende novos erros resolvidos pelo Gemini gravando no JSON.
+
+    Fluxo de aprendizado:
+    1. Build falha → KnowledgeBase tenta corrigir pelos fixes conhecidos
+    2. Se não resolveu → Gemini corrige
+    3. Gemini corrigiu → KnowledgeBase salva o novo padrão no JSON
+    4. Próxima vez → KnowledgeBase resolve sem chamar Gemini
+    """
+
+    DEFAULT_PATH = Path(__file__).parent / "known_fixes.json"
+
+    def __init__(self, log: Logger, path: Path | None = None):
+        self.log  = log
+        self.path = path or self.DEFAULT_PATH
+        self._db: dict = {}
+        self._load()
+
+    # ── Carregamento ────────────────────────────
+    def _load(self):
+        try:
+            if self.path.exists():
+                self._db = json.loads(self.path.read_text(encoding="utf-8"))
+                fixes = len(self._db.get("fixes", []))
+                total = self._db.get("_meta", {}).get("total_fixes_applied", 0)
+                self.log.ok(f"🧠 KnowledgeBase carregada: {fixes} correções conhecidas "
+                            f"({total} aplicações no total)")
+            else:
+                self.log.warn("🧠 known_fixes.json não encontrado — iniciando vazio")
+                self._db = {"_meta": {}, "fixes": [], "package_versions": {},
+                            "error_history": []}
+        except Exception as e:
+            self.log.err(f"🧠 Erro ao carregar KnowledgeBase: {e}")
+            self._db = {"_meta": {}, "fixes": [], "package_versions": {},
+                        "error_history": []}
+
+    def _save(self):
+        try:
+            self._db["_meta"]["last_updated"] = datetime.now().strftime("%Y-%m-%d")
+            self.path.write_text(
+                json.dumps(self._db, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception as e:
+            self.log.err(f"🧠 Erro ao salvar KnowledgeBase: {e}")
+
+    # ── Aplicar correções conhecidas ─────────────
+    def apply(self, code: str, errors: list[str]) -> tuple[str, list[str]]:
+        """
+        Tenta corrigir o código usando fixes conhecidos.
+        Retorna (código_corrigido, lista_de_correções_aplicadas).
+        """
+        applied = []
+        error_text = "\n".join(errors)
+
+        for fix in self._db.get("fixes", []):
+            fix_id = fix.get("id", "?")
+
+            # Verifica se algum erro do compilador bate com os padrões do fix
+            error_match = any(
+                pat.lower() in error_text.lower()
+                for pat in fix.get("error_patterns", [])
+            )
+            # Verifica se o contexto do código bate
+            context_match = all(
+                pat in code
+                for pat in fix.get("context_patterns", [])
+            )
+
+            if not (error_match and context_match):
+                continue
+
+            fix_type = fix.get("type", "")
+            desc     = fix.get("description", fix_id)
+            changed  = False
+
+            if fix_type == "regex_replace":
+                for op in fix.get("operations", []):
+                    new_code = re.sub(op["find"], op["replace"], code)
+                    if new_code != code:
+                        code    = new_code
+                        changed = True
+
+                # Garante imports necessários
+                for imp in fix.get("ensure_imports", []):
+                    if imp not in code:
+                        code    = imp + "\n" + code
+                        changed = True
+
+            elif fix_type == "pubspec_inject":
+                # Tratado separadamente pelo ProjectSourceManager
+                changed = True
+
+            elif fix_type == "info_only":
+                hint = fix.get("fix_hint", "")
+                if hint:
+                    self.log.warn(f"🧠 [{fix_id}] {desc}")
+                    self.log.warn(f"   💡 {hint}")
+
+            elif fix_type == "add_default_case":
+                # Adiciona default ao switch de LoopMode se não existir
+                def _add_default(m):
+                    block = m.group(0)
+                    if "default:" not in block:
+                        block = block.rstrip("}").rstrip() + \
+                                "\n        default:\n          break;\n      }"
+                        return block
+                    return block
+                new_code = re.sub(
+                    r'switch\s*\(\w+\)\s*\{[^}]+LoopMode[^}]+\}',
+                    _add_default, code, flags=re.DOTALL
+                )
+                if new_code != code:
+                    code    = new_code
+                    changed = True
+
+            if changed and fix_type != "info_only":
+                applied.append(desc)
+                fix["times_applied"] = fix.get("times_applied", 0) + 1
+                self.log.ok(f"🧠 [{fix_id}] Correção aplicada: {desc}")
+
+        if applied:
+            meta = self._db.setdefault("_meta", {})
+            meta["total_fixes_applied"] = meta.get("total_fixes_applied", 0) + len(applied)
+            self._save()
+
+        return code, applied
+
+    # ── Aprender com o Gemini ────────────────────
+    def learn_from_gemini(self, original_code: str, fixed_code: str,
+                          errors: list[str], session_id: str):
+        """
+        Quando o Gemini corrige um erro novo, tenta extrair o padrão
+        e gravar como um novo fix para uso futuro sem API.
+        """
+        try:
+            # Extrai comentários de correção do código do Gemini
+            corrections = []
+            for line in fixed_code.split("\n"):
+                line = line.strip()
+                if line.startswith("// -") and "CORREÇÕES" not in line:
+                    corrections.append(line[4:].strip())
+                if line.startswith("// CORREÇÕES"):
+                    continue
+
+            if not corrections:
+                return
+
+            # Registra no histórico de erros
+            entry = {
+                "session_id":   session_id,
+                "date":         datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "errors":       errors[:10],
+                "corrections":  corrections,
+                "status":       "gemini_resolved"
+            }
+            self._db.setdefault("error_history", []).append(entry)
+
+            # Tenta criar um fix automático simples por diff de linhas
+            orig_lines  = set(original_code.split("\n"))
+            fixed_lines = set(fixed_code.split("\n"))
+            removed = orig_lines - fixed_lines
+            added   = fixed_lines - orig_lines
+
+            if removed and added and len(removed) <= 5:
+                new_fix = {
+                    "id":               f"gemini_{session_id}",
+                    "description":      corrections[0] if corrections else "Fix aprendido do Gemini",
+                    "error_patterns":   [e[:80] for e in errors[:3]],
+                    "context_patterns": [],
+                    "type":             "info_only",
+                    "operations":       [],
+                    "fix_hint":         f"Gemini corrigiu: {'; '.join(corrections[:2])}",
+                    "removed_lines":    list(removed)[:5],
+                    "added_lines":      list(added)[:5],
+                    "explanation":      f"Aprendido automaticamente do Gemini em {entry['date']}",
+                    "times_applied":    0,
+                    "source":           "gemini"
+                }
+                self._db.setdefault("fixes", []).append(new_fix)
+                self.log.ok(f"🧠 Novo fix aprendido do Gemini: '{new_fix['description']}'")
+                self.log.info(f"   Total de fixes conhecidos: {len(self._db['fixes'])}")
+
+            self._save()
+
+        except Exception as e:
+            self.log.warn(f"🧠 Não foi possível aprender deste fix: {e}")
+
+    # ── Pacotes conhecidos ───────────────────────
+    def get_package_version(self, pkg: str) -> str | None:
+        return self._db.get("package_versions", {}).get(pkg)
+
+    def add_package_version(self, pkg: str, version: str):
+        """Aprende uma nova versão de pacote."""
+        pv = self._db.setdefault("package_versions", {})
+        if pkg not in pv:
+            pv[pkg] = version
+            self.log.info(f"🧠 Novo pacote aprendido: {pkg}: {version}")
+            self._save()
+
+    def stats(self) -> dict:
+        meta   = self._db.get("_meta", {})
+        fixes  = self._db.get("fixes", [])
+        hist   = self._db.get("error_history", [])
+        manual = sum(1 for f in fixes if f.get("source") == "manual")
+        learned= sum(1 for f in fixes if f.get("source") == "gemini")
+        return {
+            "total_fixes":    len(fixes),
+            "manual_fixes":   manual,
+            "learned_fixes":  learned,
+            "total_applied":  meta.get("total_fixes_applied", 0),
+            "history_count":  len(hist),
+        }
+
+
+# ─────────────────────────────────────────────────────────────
 #  Gemini Code Fixer — corrige código Dart com IA
 # ─────────────────────────────────────────────────────────────
 class GeminiCodeFixer:
@@ -401,9 +621,9 @@ class ProjectSourceManager:
     }
 
     @staticmethod
-    def _detect_and_inject_deps(code: str, project_dir: Path, log: Logger):
+    def _detect_and_inject_deps(code: str, project_dir: Path, log: Logger,
+                                kb=None):
         """Lê imports do código e injeta dependências no pubspec.yaml."""
-        # Extrai todos os package imports
         imports = re.findall(r"import\s+'package:([^/]+)/", code)
         imports += re.findall(r'import\s+"package:([^/]+)/', code)
         packages = set(imports) - {"flutter", "flutter_test", "flutter_localizations",
@@ -424,16 +644,24 @@ class ProjectSourceManager:
             if pkg in pubspec:
                 log.info(f"  já presente: {pkg}")
                 continue
-            version = ProjectSourceManager.KNOWN_PACKAGES.get(pkg)
+
+            # 1. Tenta no KnowledgeBase primeiro
+            version = kb.get_package_version(pkg) if kb else None
+
+            # 2. Fallback no dicionário local
+            if version is None:
+                version = ProjectSourceManager.KNOWN_PACKAGES.get(pkg)
+
             if version is None and pkg in ProjectSourceManager.KNOWN_PACKAGES:
-                # SDK package — pula
-                continue
+                continue  # SDK package
+
             if version:
-                # Injeta antes da linha 'flutter:'
-                entry = f"  {pkg}: {version}\n"
                 pubspec = pubspec.replace(
                     "\nflutter:\n", f"\n  {pkg}: {version}\nflutter:\n", 1)
                 added.append(f"{pkg}: {version}")
+                # Ensina ao KB se veio do dicionário local
+                if kb:
+                    kb.add_package_version(pkg, version)
             else:
                 unknown.append(pkg)
 
@@ -524,7 +752,8 @@ class ProjectSourceManager:
         return code, fixes
 
     @staticmethod
-    def from_code(code: str, work_dir: Path, flutter_exe: str, log: Logger) -> Path:
+    def from_code(code: str, work_dir: Path, flutter_exe: str, log: Logger,
+                  kb=None) -> Path:
         # Aplica correções estáticas conhecidas antes de criar o projeto
         code, _ = ProjectSourceManager._apply_static_fixes(code, log)
 
@@ -581,7 +810,8 @@ class ProjectSourceManager:
         log.ok(f"Projeto criado com sucesso. main.dart substituído ({len(content)} chars)")
 
         # Detecta e injeta dependências do código no pubspec.yaml
-        ProjectSourceManager._detect_and_inject_deps(code, project_dir, log)
+        # kb é passado opcionalmente via from_code se disponível
+        ProjectSourceManager._detect_and_inject_deps(code, project_dir, log, kb=kb)
         return project_dir
 
     @staticmethod
@@ -1012,11 +1242,12 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self._devices: list[tuple[str,str]] = []
         self._adb_exe: str | None = None
         self.work_dir       = Path(tempfile.mkdtemp(prefix="flutter_orch_"))
-        self._checklist: Checklist | None = None   # resultado do último checklist
+        self._checklist: Checklist | None = None
+        self.kb: KnowledgeBase | None = None   # iniciado após _build_ui (precisa do Logger)
 
         self._build_ui()
-        self._poll_adb()   # detecção automática a cada 2s
-        # Roda checklist automaticamente ao abrir
+        self.kb = KnowledgeBase(self.log)      # Logger já existe aqui
+        self._poll_adb()
         threading.Thread(target=self._run_checklist, daemon=True).start()
 
     # ── UI ──────────────────────────────────────
@@ -1262,6 +1493,13 @@ class FlutterOrchestratorGUI(ctk.CTk):
     def _run_checklist(self):
         self.log.sep()
         self.log.info("🔍 VERIFICANDO AMBIENTE...")
+        # Mostra estatísticas do cérebro
+        if self.kb:
+            s = self.kb.stats()
+            self.log.info(f"🧠 Cérebro: {s['total_fixes']} fixes conhecidos "
+                          f"({s['manual_fixes']} manuais + {s['learned_fixes']} aprendidos) "
+                          f"| {s['total_applied']} aplicações | "
+                          f"{s['history_count']} erros no histórico")
         cl = Checklist(self.log)
         ok = cl.run()
         self._checklist = cl
@@ -1458,7 +1696,8 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
             if source_type == "code":
                 project = ProjectSourceManager.from_code(
-                    source_data, self.work_dir, cl.flutter_exe, self.log)
+                    source_data, self.work_dir, cl.flutter_exe, self.log,
+                    kb=self.kb)
             elif source_type == "folder":
                 project = ProjectSourceManager.from_directory(source_data, self.log)
             else:
@@ -1502,48 +1741,79 @@ class FlutterOrchestratorGUI(ctk.CTk):
             except Exception as local_err:
                 self.log.warn(f"Exceção no build local: {local_err}")
 
-            # ── ETAPA 3b: Correção automática com Gemini ──
+            # ── ETAPA 3b: KnowledgeBase (grátis, sem API) ──
+            if not local_ok and build_errors:
+                self.log.sep()
+                self.log.info("[3b] 🧠 Consultando KnowledgeBase...")
+                self._set_status("🧠 Aplicando fixes conhecidos...", "#9c27b0")
+                main_dart = project / "lib" / "main.dart"
+                current_code = main_dart.read_text(encoding="utf-8", errors="replace")
+
+                kb_fixed, kb_applied = self.kb.apply(current_code, build_errors) \
+                    if self.kb else (current_code, [])
+
+                if kb_applied:
+                    main_dart.write_text(kb_fixed, encoding="utf-8")
+                    self.log.ok(f"🧠 {len(kb_applied)} fix(es) do cérebro aplicados — recompilando...")
+                    runner.flutter_cmd(["clean"], project, fail_on_error=False)
+                    runner.flutter_cmd(["pub", "get"], project)
+                    build_ok_kb, build_errors = runner.flutter_cmd_with_errors(
+                        ["build", "apk", build_flag], project)
+                    if build_ok_kb:
+                        apk = self._find_apk(project)
+                        if apk:
+                            local_ok = True
+                            self.log.ok("🧠 Build concluído com fixes do cérebro! (sem API)")
+                    if not local_ok:
+                        self.log.warn("🧠 Fixes do cérebro não resolveram completamente")
+                else:
+                    self.log.info("🧠 Nenhum fix conhecido para estes erros")
+
+            # ── ETAPA 3c: Gemini (API — só se KB não resolveu) ──
             if not local_ok and source_type == "code" and build_errors:
                 gemini_key = self.gemini_key.get().strip()
                 if gemini_key:
                     self.log.sep()
-                    self.log.info("[3b] 🤖 Tentando correção automática com Gemini...")
+                    self.log.info("[3c] 🤖 Consultando Gemini...")
                     self._set_status("🤖 Gemini corrigindo código...", "#9c27b0")
 
-                    current_code = (project / "lib" / "main.dart").read_text(
-                        encoding="utf-8", errors="replace")
+                    main_dart = project / "lib" / "main.dart"
+                    current_code = main_dart.read_text(encoding="utf-8", errors="replace")
+                    original_code = current_code  # guarda para aprendizado
+
                     fixer = GeminiCodeFixer(gemini_key, self.log)
                     fixed_code = fixer.fix(current_code, build_errors)
 
                     if fixed_code:
-                        # Salva código corrigido
-                        main_dart = project / "lib" / "main.dart"
                         main_dart.write_text(fixed_code, encoding="utf-8")
                         self.log.ok("🤖 Código corrigido pelo Gemini — recompilando...")
 
-                        # Exibe resumo das correções (linhas de comentário // CORREÇÕES)
                         for line in fixed_code.split("\n"):
                             if "CORREÇÕES" in line or line.strip().startswith("// -"):
                                 self.log.info(f"  {line.strip()}")
 
-                        # Tenta build novamente com código corrigido
-                        self._set_status("Recompilando após correção...", "#9c27b0")
                         runner.flutter_cmd(["clean"], project, fail_on_error=False)
                         runner.flutter_cmd(["pub", "get"], project)
-                        build_ok2, _ = runner.flutter_cmd_with_errors(
+                        build_ok_gem, _ = runner.flutter_cmd_with_errors(
                             ["build", "apk", build_flag], project)
 
-                        if build_ok2:
+                        if build_ok_gem:
                             apk = self._find_apk(project)
                             if apk:
                                 local_ok = True
                                 self.log.ok("🤖 Build concluído após correção do Gemini!")
+                                # ── Aprende com o Gemini ──
+                                if self.kb:
+                                    session_id = datetime.now().strftime("%Y%m%d%H%M%S")
+                                    self.kb.learn_from_gemini(
+                                        original_code, fixed_code,
+                                        build_errors, session_id)
                         if not local_ok:
                             self.log.warn("🤖 Correção do Gemini não resolveu — indo para CI...")
                     else:
                         self.log.warn("🤖 Gemini não retornou correção válida")
                 else:
-                    # Sem Gemini: mostra erros detalhados para o usuário corrigir
+                    # Sem Gemini: mostra erros detalhados
                     self.log.sep()
                     self.log.warn("━━━ ERROS QUE IMPEDEM A COMPILAÇÃO ━━━")
                     self.log.warn("Configure a API Key do Gemini para correção automática")

@@ -1,0 +1,135 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "description": "Cérebro do OrquestradorAPK — erros conhecidos e suas correções. Cresce automaticamente a cada novo erro resolvido.",
+    "total_fixes_applied": 0,
+    "last_updated": "2026-06-19"
+  },
+  "fixes": [
+    {
+      "id": "just_audio_repeatmode",
+      "description": "just_audio usa LoopMode, não RepeatMode do Flutter",
+      "error_patterns": [
+        "Member not found: 'off'",
+        "Member not found: 'one'",
+        "Member not found: 'all'",
+        "RepeatMode",
+        "not exhaustively matched"
+      ],
+      "context_patterns": ["just_audio", "RepeatMode"],
+      "type": "regex_replace",
+      "operations": [
+        {"find": "\\bRepeatMode\\.off\\b",  "replace": "LoopMode.off"},
+        {"find": "\\bRepeatMode\\.one\\b",  "replace": "LoopMode.one"},
+        {"find": "\\bRepeatMode\\.all\\b",  "replace": "LoopMode.all"},
+        {"find": "\\bRepeatMode\\b",         "replace": "LoopMode"}
+      ],
+      "ensure_imports": ["import 'package:just_audio/just_audio.dart';"],
+      "explanation": "just_audio >= 0.9 usa LoopMode em vez de RepeatMode do Flutter framework",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "just_audio_seturl_removed",
+      "description": "AudioPlayer.setUrl() foi removido no just_audio >= 0.9",
+      "error_patterns": [
+        "setUrl",
+        "Method not found: 'setUrl'"
+      ],
+      "context_patterns": ["just_audio", ".setUrl("],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Substitua: player.setUrl(url)  →  player.setAudioSource(AudioSource.uri(Uri.parse(url)))",
+      "explanation": "setUrl() foi removido. Use AudioSource.uri() como fonte de áudio",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "shared_preferences_await",
+      "description": "SharedPreferences.getX() é síncrono desde v2.x — await desnecessário",
+      "error_patterns": [
+        "await prefs.get",
+        "The await expression can only be used in an async"
+      ],
+      "context_patterns": ["shared_preferences", "await prefs.get"],
+      "type": "regex_replace",
+      "operations": [
+        {"find": "await (prefs\\.get\\w+\\([^)]*\\))", "replace": "\\1"}
+      ],
+      "explanation": "SharedPreferences v2+ tornou getters síncronos. Remover await.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "missing_pubspec_deps",
+      "description": "Pacotes usados no código não declarados no pubspec.yaml",
+      "error_patterns": [
+        "Couldn't resolve the package",
+        "Not found: 'package:",
+        "Target of URI doesn't exist"
+      ],
+      "context_patterns": ["import 'package:"],
+      "type": "pubspec_inject",
+      "operations": [],
+      "explanation": "Detectar imports e injetar dependências automaticamente no pubspec.yaml",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "switch_exhaustive_loopmode",
+      "description": "Switch em LoopMode sem case default — erro de exhaustiveness Dart 3",
+      "error_patterns": [
+        "not exhaustively matched",
+        "doesn't match 'LoopMode.restart'",
+        "doesn't match 'RepeatMode.restart'"
+      ],
+      "context_patterns": ["switch", "LoopMode"],
+      "type": "add_default_case",
+      "operations": [],
+      "fix_hint": "Adicionar 'default: break;' no switch de LoopMode",
+      "explanation": "Dart 3 exige exhaustiveness em switch. LoopMode tem valor .restart que precisa de case",
+      "times_applied": 0,
+      "source": "manual"
+    }
+  ],
+  "package_versions": {
+    "path_provider":        "^2.1.4",
+    "shared_preferences":   "^2.3.2",
+    "just_audio":           "^0.9.40",
+    "http":                 "^1.2.2",
+    "provider":             "^6.1.2",
+    "get":                  "^4.6.6",
+    "dio":                  "^5.7.0",
+    "cached_network_image": "^3.4.1",
+    "flutter_bloc":         "^8.1.6",
+    "sqflite":              "^2.3.3",
+    "hive":                 "^2.2.3",
+    "hive_flutter":         "^1.1.0",
+    "image_picker":         "^1.1.2",
+    "permission_handler":   "^11.3.1",
+    "url_launcher":         "^6.3.0",
+    "connectivity_plus":    "^6.1.0",
+    "intl":                 "^0.19.0",
+    "lottie":               "^3.1.2",
+    "flutter_svg":          "^2.0.10",
+    "google_fonts":         "^6.2.1",
+    "audioplayers":         "^6.1.0",
+    "camera":               "^0.11.0",
+    "geolocator":           "^13.0.1",
+    "firebase_core":        "^3.6.0",
+    "firebase_auth":        "^5.3.1",
+    "cloud_firestore":      "^5.4.3",
+    "video_player":         "^2.9.1",
+    "animations":           "^2.0.11",
+    "flutter_animate":      "^4.5.0",
+    "rxdart":               "^0.28.0",
+    "equatable":            "^2.0.5",
+    "freezed_annotation":   "^2.4.4",
+    "json_annotation":      "^4.9.0",
+    "path":                 "^1.9.0",
+    "uuid":                 "^4.5.1",
+    "crypto":               "^3.0.5",
+    "collection":           "^1.19.0"
+  },
+  "error_history": []
+}
