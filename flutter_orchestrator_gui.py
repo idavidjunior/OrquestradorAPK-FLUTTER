@@ -246,7 +246,7 @@ class GeminiCodeFixer:
     Usa a API Gemini para analisar erros do compilador Dart,
     corrigir o código e retornar o código corrigido com explicações.
     """
-    API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 
     def __init__(self, api_key: str, log: Logger):
         self.api_key = api_key
@@ -481,7 +481,53 @@ class ProjectSourceManager:
         return warnings
 
     @staticmethod
+    def _apply_static_fixes(code: str, log: Logger) -> tuple[str, list[str]]:
+        """
+        Aplica correções estáticas conhecidas sem precisar da API Gemini.
+        Retorna (código_corrigido, lista_de_correções_aplicadas).
+        """
+        fixes = []
+        original = code
+
+        # just_audio: RepeatMode → LoopMode
+        if "just_audio" in code and "RepeatMode" in code:
+            code = re.sub(r'\bRepeatMode\.off\b', 'LoopMode.off', code)
+            code = re.sub(r'\bRepeatMode\.one\b', 'LoopMode.one', code)
+            code = re.sub(r'\bRepeatMode\.all\b', 'LoopMode.all', code)
+            # Substitui declaração do tipo
+            code = re.sub(r'\bRepeatMode\b(?!\s*\.\s*restart)', 'LoopMode', code)
+            # Garante import do just_audio
+            if "import 'package:just_audio/just_audio.dart'" not in code:
+                code = "import 'package:just_audio/just_audio.dart';\n" + code
+            fixes.append("RepeatMode → LoopMode (just_audio)")
+
+        # Remove switch exhaustiveness: adiciona default se tiver switch em LoopMode
+        if "switch (_" in code and "LoopMode" in code:
+            # Adiciona case default se não existir no switch de LoopMode
+            import re as _re
+            def _add_default(m):
+                block = m.group(0)
+                if "default:" not in block and "case LoopMode.off" in block:
+                    block = block.rstrip("}").rstrip() + "\n        default:\n          break;\n      }"
+                    fixes.append("Adicionado case default no switch de LoopMode")
+                return block
+            code = _re.sub(
+                r'switch\s*\(_\w+\)\s*\{[^}]+LoopMode[^}]+\}',
+                _add_default, code, flags=_re.DOTALL
+            )
+
+        if code != original:
+            log.ok(f"Correções estáticas aplicadas: {', '.join(fixes)}")
+        else:
+            log.info("Nenhuma correção estática necessária")
+
+        return code, fixes
+
+    @staticmethod
     def from_code(code: str, work_dir: Path, flutter_exe: str, log: Logger) -> Path:
+        # Aplica correções estáticas conhecidas antes de criar o projeto
+        code, _ = ProjectSourceManager._apply_static_fixes(code, log)
+
         project_dir = work_dir / "pasted_project"
         if project_dir.exists():
             shutil.rmtree(project_dir)
@@ -975,72 +1021,152 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
     # ── UI ──────────────────────────────────────
     def _build_ui(self):
-        # Header
-        hdr = ctk.CTkFrame(self, fg_color="transparent")
-        hdr.pack(fill="x", padx=10, pady=(12, 4))
-        ctk.CTkLabel(hdr, text="🚀 Flutter Build Orchestrator",
-                     font=ctk.CTkFont(size=22, weight="bold")).pack(side="left")
-        ctk.CTkLabel(hdr, text="compile · instale · entregue",
-                     font=ctk.CTkFont(size=12), text_color="gray").pack(
-                         side="left", padx=10, pady=(4, 0))
+        # ── Painel superior: configurações (fixo, compacto) ──
+        top_panel = ctk.CTkFrame(self, fg_color="transparent")
+        top_panel.pack(fill="x", padx=6, pady=(6, 0))
 
-        # Tabs de entrada
-        self.tabview = ctk.CTkTabview(self, height=210)
-        self.tabview.pack(fill="x", padx=10, pady=(4, 0))
+        # Header compacto (1 linha)
+        hdr = ctk.CTkFrame(top_panel, fg_color="transparent")
+        hdr.pack(fill="x")
+        ctk.CTkLabel(hdr, text="🚀 Flutter Build Orchestrator",
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
+        ctk.CTkLabel(hdr, text="compile · instale · entregue",
+                     font=ctk.CTkFont(size=11), text_color="gray").pack(
+                         side="left", padx=8, pady=(2, 0))
+
+        # Status + progresso na mesma linha do header
+        self.lbl_status = ctk.CTkLabel(hdr, text="● Pronto", text_color="gray",
+                                        font=ctk.CTkFont(size=11))
+        self.lbl_status.pack(side="right", padx=8)
+        self.progress = ctk.CTkProgressBar(hdr, mode="indeterminate", width=180)
+        self.progress.pack(side="right", padx=4)
+        self.progress.set(0)
+
+        # Tabs de entrada (altura reduzida)
+        self.tabview = ctk.CTkTabview(top_panel, height=170)
+        self.tabview.pack(fill="x", pady=(4, 0))
         for tab in ("📋 Colar Código", "📁 Pasta / Diretório", "🔗 Link GitHub"):
             self.tabview.add(tab)
         self._tab_code()
         self._tab_folder()
         self._tab_github()
 
-        # Opções
-        self._row_options()
-        # CI
-        self._row_ci()
-        # Gemini
-        self._row_gemini()
-        # ADB
-        self._row_adb()
+        # Opções em grid 2x2 compacto
+        opts = ctk.CTkFrame(top_panel)
+        opts.pack(fill="x", pady=(3, 0))
 
-        # Botão build
+        # Linha 1: build type + flutter status + botão verificar
+        r1 = ctk.CTkFrame(opts, fg_color="transparent")
+        r1.pack(fill="x", padx=6, pady=(4, 0))
+        ctk.CTkLabel(r1, text="⚙️", width=20).pack(side="left")
+        ctk.CTkRadioButton(r1, text="📦 Release", variable=self.build_type,
+                           value="release").pack(side="left", padx=6)
+        ctk.CTkRadioButton(r1, text="🐛 Debug", variable=self.build_type,
+                           value="debug").pack(side="left", padx=6)
+        ctk.CTkCheckBox(r1, text="Auto-instalar Flutter",
+                        variable=self.auto_install).pack(side="left", padx=10)
+        self.lbl_flutter_status = ctk.CTkLabel(
+            r1, text="", text_color="gray", font=ctk.CTkFont(size=11))
+        self.lbl_flutter_status.pack(side="left", padx=4)
+        ctk.CTkButton(r1, text="🔍 Verificar", width=100, height=26,
+                      command=lambda: threading.Thread(
+                          target=self._run_checklist, daemon=True).start()
+                      ).pack(side="right", padx=6)
+
+        # Linha 2: CI + Gemini
+        r2 = ctk.CTkFrame(opts, fg_color="transparent")
+        r2.pack(fill="x", padx=6, pady=(2, 0))
+        ctk.CTkLabel(r2, text="☁️", width=20).pack(side="left")
+        self.lbl_ci_mode = ctk.CTkLabel(r2, text="● Aguardando", text_color="gray",
+                                         font=ctk.CTkFont(size=11, weight="bold"))
+        self.lbl_ci_mode.pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(r2, text="CI Token:", text_color="gray",
+                     font=ctk.CTkFont(size=11)).pack(side="left")
+        ci_entry = ctk.CTkEntry(r2, textvariable=self.ci_token,
+                                placeholder_text="ghp_xxx...", show="*", width=200, height=26)
+        ci_entry.pack(side="left", padx=4)
+        self.lbl_token_status = ctk.CTkLabel(r2, text="⬜", text_color="gray",
+                                              font=ctk.CTkFont(size=11))
+        self.lbl_token_status.pack(side="left", padx=2)
+        ctk.CTkButton(r2, text="✓", width=30, height=26,
+                      command=lambda: threading.Thread(
+                          target=self._validate_token, daemon=True).start()
+                      ).pack(side="left", padx=2)
+        ci_entry.bind("<FocusOut>", lambda e: threading.Thread(
+            target=self._validate_token, daemon=True).start())
+
+        # Gemini na mesma linha
+        ctk.CTkLabel(r2, text="  🤖 Gemini:", text_color="gray",
+                     font=ctk.CTkFont(size=11)).pack(side="left", padx=(10, 0))
+        gem_entry = ctk.CTkEntry(r2, textvariable=self.gemini_key,
+                                  placeholder_text="AIza...", show="*", width=200, height=26)
+        gem_entry.pack(side="left", padx=4)
+        self.lbl_gemini_status = ctk.CTkLabel(r2, text="⬜", text_color="gray",
+                                               font=ctk.CTkFont(size=11))
+        self.lbl_gemini_status.pack(side="left", padx=2)
+        ctk.CTkButton(r2, text="✓", width=30, height=26,
+                      command=lambda: threading.Thread(
+                          target=self._validate_gemini_key, daemon=True).start()
+                      ).pack(side="left", padx=2)
+        gem_entry.bind("<FocusOut>", lambda e: threading.Thread(
+            target=self._validate_gemini_key, daemon=True).start())
+
+        # Linha 3: ADB
+        r3 = ctk.CTkFrame(opts, fg_color="transparent")
+        r3.pack(fill="x", padx=6, pady=(2, 4))
+        ctk.CTkLabel(r3, text="📱", width=20).pack(side="left")
+        self.lbl_adb_status = ctk.CTkLabel(r3, text="● Sem dispositivo",
+                                            text_color="gray",
+                                            font=ctk.CTkFont(size=11, weight="bold"))
+        self.lbl_adb_status.pack(side="left", padx=(0, 6))
+        self.menu_device = ctk.CTkOptionMenu(r3, variable=self.device_var,
+                                              values=["Nenhum dispositivo"],
+                                              width=200, height=26)
+        self.menu_device.pack(side="left", padx=4)
+        ctk.CTkButton(r3, text="🔄", width=30, height=26,
+                      command=lambda: threading.Thread(
+                          target=self._refresh_devices, daemon=True).start()
+                      ).pack(side="left", padx=2)
+        ctk.CTkCheckBox(r3, text="Instalar auto", variable=self.auto_adb,
+                        height=26).pack(side="left", padx=10)
+        self.btn_install = ctk.CTkButton(
+            r3, text="📲 Instalar", width=110, height=26,
+            command=self._manual_install,
+            fg_color="#1565C0", hover_color="#0D47A1", state="disabled")
+        self.btn_install.pack(side="left", padx=4)
+
+        # Botão build grande
         self.btn_build = ctk.CTkButton(
-            self, text="🔨 Iniciar Build", command=self.start_build,
-            height=46, font=ctk.CTkFont(size=15, weight="bold"),
+            top_panel, text="🔨 Iniciar Build", command=self.start_build,
+            height=40, font=ctk.CTkFont(size=14, weight="bold"),
             fg_color="#28a745", hover_color="#218838"
         )
-        self.btn_build.pack(fill="x", padx=10, pady=(8, 2))
+        self.btn_build.pack(fill="x", pady=(4, 2))
 
-        # Progress + status
-        self.progress = ctk.CTkProgressBar(self, mode="indeterminate")
-        self.progress.pack(fill="x", padx=10, pady=(0, 2))
-        self.progress.set(0)
-        self.lbl_status = ctk.CTkLabel(self, text="● Pronto", text_color="gray",
-                                        font=ctk.CTkFont(size=12))
-        self.lbl_status.pack(anchor="w", padx=14)
-
-        # Log
+        # ── Painel inferior: LOG (ocupa todo o resto) ──
         lf = ctk.CTkFrame(self)
-        lf.pack(fill="both", expand=True, padx=10, pady=(4, 8))
-        top = ctk.CTkFrame(lf, fg_color="transparent")
-        top.pack(fill="x", padx=8, pady=(6, 2))
-        ctk.CTkLabel(top, text="📋 Log em Tempo Real",
-                     font=ctk.CTkFont(weight="bold")).pack(side="left")
-        # Botão abrir pasta de saída
+        lf.pack(fill="both", expand=True, padx=6, pady=(2, 6))
+
+        log_hdr = ctk.CTkFrame(lf, fg_color="transparent")
+        log_hdr.pack(fill="x", padx=6, pady=(4, 2))
+        ctk.CTkLabel(log_hdr, text="📋 Log em Tempo Real",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
         self.btn_open_output = ctk.CTkButton(
-            top, text="📂 Abrir Pasta do APK", width=160, height=26,
+            log_hdr, text="📂 Abrir Pasta do APK", width=170, height=28,
             command=self._open_output_folder, state="disabled",
             fg_color="#1565C0", hover_color="#0D47A1"
         )
-        self.btn_open_output.pack(side="right", padx=(6, 0))
-        ctk.CTkButton(top, text="🗑 Limpar", width=80, height=26,
+        self.btn_open_output.pack(side="right", padx=(4, 0))
+        ctk.CTkButton(log_hdr, text="🗑 Limpar", width=80, height=28,
                       command=self._clear_log).pack(side="right")
+
         self.log_box = ctk.CTkTextbox(
             lf, wrap="word", state="disabled",
             font=ctk.CTkFont(family="Courier New", size=12)
         )
-        self.log_box.pack(fill="both", expand=True, padx=4, pady=(0, 6))
+        self.log_box.pack(fill="both", expand=True, padx=4, pady=(0, 4))
 
-        # Inicia o Logger (drena a fila via timer interno)
+        # Inicia o Logger
         self.log = Logger(self.log_box)
 
     def _tab_code(self):
@@ -1081,132 +1207,22 @@ class FlutterOrchestratorGUI(ctk.CTk):
                      placeholder_text="ghp_xxx... (opcional)",
                      show="*").pack(side="left", padx=8)
 
-    def _row_options(self):
-        f = ctk.CTkFrame(self)
-        f.pack(fill="x", padx=10, pady=(4, 0))
-        ctk.CTkLabel(f, text="⚙️ Build:",
-                     font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12)
-        ctk.CTkRadioButton(f, text="📦 Release",
-                           variable=self.build_type, value="release").pack(
-                               side="left", padx=10, pady=8)
-        ctk.CTkRadioButton(f, text="🐛 Debug",
-                           variable=self.build_type, value="debug").pack(
-                               side="left", padx=10)
-        ctk.CTkCheckBox(f, text="Instalar Flutter automaticamente",
-                        variable=self.auto_install).pack(side="left", padx=20)
-        self.lbl_flutter_status = ctk.CTkLabel(
-            f, text="", text_color="gray", font=ctk.CTkFont(size=11))
-        self.lbl_flutter_status.pack(side="left", padx=4)
-        ctk.CTkButton(f, text="🔍 Verificar Ambiente", width=160,
-                      command=lambda: threading.Thread(
-                          target=self._run_checklist, daemon=True).start()
-                      ).pack(side="right", padx=12)
-
-    def _row_gemini(self):
-        f = ctk.CTkFrame(self)
-        f.pack(fill="x", padx=10, pady=(4, 0))
-        ctk.CTkLabel(f, text="🤖 Gemini:",
-                     font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
-        ctk.CTkLabel(f, text="API Key:", text_color="gray").pack(side="left")
-        key_entry = ctk.CTkEntry(
-            f, textvariable=self.gemini_key,
-            placeholder_text="AIza... (corrige código automaticamente)",
-            show="*", width=320)
-        key_entry.pack(side="left", padx=8)
-        self.lbl_gemini_status = ctk.CTkLabel(
-            f, text="⬜ não configurado", text_color="gray",
-            font=ctk.CTkFont(size=11))
-        self.lbl_gemini_status.pack(side="left", padx=4)
-        ctk.CTkButton(f, text="Validar", width=70,
-                      command=lambda: threading.Thread(
-                          target=self._validate_gemini_key, daemon=True).start()
-                      ).pack(side="left", padx=4)
-        ctk.CTkLabel(f,
-                     text="Se configurado: corrige erros de compilação automaticamente",
-                     text_color="gray", font=ctk.CTkFont(size=10)
-                     ).pack(side="left", padx=10)
-        key_entry.bind("<FocusOut>", lambda e: threading.Thread(
-            target=self._validate_gemini_key, daemon=True).start())
-        key_entry.bind("<Return>", lambda e: threading.Thread(
-            target=self._validate_gemini_key, daemon=True).start())
-
+    # ── Helpers UI ──────────────────────────────
     def _validate_gemini_key(self):
         key = self.gemini_key.get().strip()
         if not key:
             self.after(0, lambda: self.lbl_gemini_status.configure(
-                text="⬜ não configurado", text_color="gray"))
+                text="⬜", text_color="gray"))
             return
         self.after(0, lambda: self.lbl_gemini_status.configure(
-            text="🔄 validando...", text_color="#ffc107"))
+            text="🔄", text_color="#ffc107"))
         ok, msg = GeminiCodeFixer.validate_key(key)
         color = "#00cc66" if ok else "#ff4444"
         icon  = "✅" if ok else "❌"
-        self.after(0, lambda m=msg: self.lbl_gemini_status.configure(
-            text=f"{icon} {m}", text_color=color))
-        if ok:
-            self.log.ok(f"🤖 Gemini API válida: {msg}")
-        else:
-            self.log.err(f"🤖 Gemini API inválida: {msg}")
-
-    def _row_ci(self):
-        f = ctk.CTkFrame(self)
-        f.pack(fill="x", padx=10, pady=(4, 0))
-        ctk.CTkLabel(f, text="☁️ CI:",
-                     font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
-        self.lbl_ci_mode = ctk.CTkLabel(
-            f, text="● Aguardando", text_color="gray",
-            font=ctk.CTkFont(size=12, weight="bold"))
-        self.lbl_ci_mode.pack(side="left", padx=(0, 10))
-        ctk.CTkLabel(f, text="Token:", text_color="gray").pack(side="left")
-        token_entry = ctk.CTkEntry(
-            f, textvariable=self.ci_token,
-            placeholder_text="ghp_xxx...", show="*", width=260)
-        token_entry.pack(side="left", padx=6)
-        self.lbl_token_status = ctk.CTkLabel(
-            f, text="⬜ não validado", text_color="gray",
-            font=ctk.CTkFont(size=11))
-        self.lbl_token_status.pack(side="left", padx=4)
-        ctk.CTkButton(f, text="Validar", width=70,
-                      command=lambda: threading.Thread(
-                          target=self._validate_token, daemon=True).start()
-                      ).pack(side="left", padx=4)
-        token_entry.bind("<FocusOut>", lambda e: threading.Thread(
-            target=self._validate_token, daemon=True).start())
-        token_entry.bind("<Return>", lambda e: threading.Thread(
-            target=self._validate_token, daemon=True).start())
-
-    def _row_adb(self):
-        f = ctk.CTkFrame(self)
-        f.pack(fill="x", padx=10, pady=(4, 0))
-        ctk.CTkLabel(f, text="📱 ADB:",
-                     font=ctk.CTkFont(weight="bold")).pack(side="left", padx=12, pady=8)
-
-        # Indicador de status do dispositivo
-        self.lbl_adb_status = ctk.CTkLabel(
-            f, text="● Sem dispositivo", text_color="gray",
-            font=ctk.CTkFont(size=12, weight="bold"))
-        self.lbl_adb_status.pack(side="left", padx=(0, 10))
-
-        self.menu_device = ctk.CTkOptionMenu(
-            f, variable=self.device_var,
-            values=["Nenhum dispositivo"], width=220)
-        self.menu_device.pack(side="left", padx=4)
-
-        ctk.CTkButton(f, text="🔄", width=36,
-                      command=lambda: threading.Thread(
-                          target=self._refresh_devices, daemon=True).start()
-                      ).pack(side="left", padx=2)
-
-        ctk.CTkCheckBox(f, text="Instalar auto após build",
-                        variable=self.auto_adb).pack(side="left", padx=14)
-
-        self.btn_install = ctk.CTkButton(
-            f, text="📲 Instalar no Dispositivo", width=200,
-            command=self._manual_install,
-            fg_color="#1565C0", hover_color="#0D47A1", state="disabled")
-        self.btn_install.pack(side="left", padx=8)
-
-    # ── Helpers UI ──────────────────────────────
+        self.after(0, lambda m=f"{icon} {msg}": self.lbl_gemini_status.configure(
+            text=m, text_color=color))
+        level = "ok" if ok else "err"
+        self.log.put(f"🤖 Gemini: {msg}", level)
     def _open_output_folder(self):
         """Abre a pasta que contém o último APK gerado."""
         if not self.last_apk:
@@ -1549,6 +1565,18 @@ class FlutterOrchestratorGUI(ctk.CTk):
                         "Build local falhou. Configure o token CI para usar o fallback.")
                 self._set_ci_mode("ci")
                 self._set_status("GitHub Actions — aguardando...", "#ffc107")
+
+                # Garante que o CI recebe código corrigido (não o código quebrado original)
+                if source_type == "code":
+                    main_dart = project / "lib" / "main.dart"
+                    if main_dart.exists():
+                        current = main_dart.read_text(encoding="utf-8", errors="replace")
+                        fixed, applied = ProjectSourceManager._apply_static_fixes(
+                            current, self.log)
+                        if applied:
+                            main_dart.write_text(fixed, encoding="utf-8")
+                            self.log.ok(f"Código corrigido antes do CI: {', '.join(applied)}")
+
                 ci = CIEngine(token, self.log)
                 apk_path = ci.run_pipeline(project, self.build_type.get())
                 if not apk_path:
