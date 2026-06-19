@@ -346,13 +346,16 @@ class KnowledgeBase:
                 # Adiciona default ao switch de LoopMode se não existir
                 def _add_default(m):
                     block = m.group(0)
-                    if "default:" not in block:
-                        block = block.rstrip("}").rstrip() + \
-                                "\n        default:\n          break;\n      }"
+                    if "default:" not in block and "default :" not in block:
+                        block = block.rstrip().rstrip("}").rstrip()
+                        block += """
+  default:
+    break;
+}"""
                         return block
                     return block
                 new_code = re.sub(
-                    r'switch\s*\(\w+\)\s*\{[^}]+LoopMode[^}]+\}',
+                    r'switch\s*\([^)]+\)\s*\{(?:[^{}]|\{[^{}]*\})*\}',
                     _add_default, code, flags=re.DOTALL
                 )
                 if new_code != code:
@@ -730,17 +733,25 @@ class ProjectSourceManager:
             fixes.append("RepeatMode → LoopMode (just_audio)")
 
         # Remove switch exhaustiveness: adiciona default se tiver switch em LoopMode
-        if "switch (_" in code and "LoopMode" in code:
+        if "switch (" in code and "LoopMode" in code:
             # Adiciona case default se não existir no switch de LoopMode
             import re as _re
             def _add_default(m):
                 block = m.group(0)
-                if "default:" not in block and "case LoopMode.off" in block:
-                    block = block.rstrip("}").rstrip() + "\n        default:\n          break;\n      }"
+                # Verifica se já tem default no switch
+                if "default:" not in block and "default :" not in block:
+                    # Remove a chave de fechamento final e espaços em branco
+                    block = block.rstrip().rstrip("}").rstrip()
+                    # Adiciona o case default com indentação correta (2 espaços por nível)
+                    block += """
+  default:
+    break;
+}"""
                     fixes.append("Adicionado case default no switch de LoopMode")
                 return block
+            # Regex mais robusto para capturar switch completo
             code = _re.sub(
-                r'switch\s*\(_\w+\)\s*\{[^}]+LoopMode[^}]+\}',
+                r'switch\s*\([^)]+\)\s*\{(?:[^{}]|\{[^{}]*\})*\}',
                 _add_default, code, flags=_re.DOTALL
             )
 
