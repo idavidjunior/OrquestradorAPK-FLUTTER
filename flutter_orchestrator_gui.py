@@ -437,7 +437,7 @@ class KnowledgeBase:
     # ── Aprender com protocolos de sucesso ────────
     def learn_success_protocol(self, source_type: str, build_type: str,
                                fixes_applied: list[str], elapsed_seconds: float,
-                               code_hash: str):
+                               code_hash: str, code_content: str = ""):
         """
         Quando um build tem sucesso, registra o protocolo bem-sucedido
         para aprendizado futuro e replicação.
@@ -451,6 +451,7 @@ class KnowledgeBase:
                 "fixes_applied": fixes_applied,
                 "elapsed_seconds": round(elapsed_seconds, 2),
                 "code_hash": code_hash,
+                "code_snapshot": code_content[:5000] if code_content else "",  # Primeiros 5k chars para comparação
                 "status": "success"
             }
             
@@ -468,6 +469,87 @@ class KnowledgeBase:
             
         except Exception as e:
             self.log.warn(f"🧠 Não foi possível registrar protocolo de sucesso: {e}")
+
+    # ── Buscar protocolos similares ────────
+    def find_similar_protocols(self, code_content: str, top_k: int = 3) -> list[dict]:
+        """
+        Encontra protocolos de sucesso com código similar.
+        Útil para detectar se é uma atualização de um app já construído.
+        Retorna lista de protocolos ordenados por similaridade.
+        """
+        if not code_content or "success_protocols" not in self._db:
+            return []
+        
+        import hashlib
+        
+        # Hash exato
+        current_hash = hashlib.sha256(code_content.encode()).hexdigest()[:16]
+        
+        scored_protocols = []
+        for protocol in self._db.get("success_protocols", []):
+            score = 0
+            reasons = []
+            
+            # Hash idêntico (mesmo código)
+            if protocol.get("code_hash") == current_hash:
+                score += 100
+                reasons.append("hash_idêntico")
+            
+            # Snapshot parcial similar (comparação simples por substring)
+            snapshot = protocol.get("code_snapshot", "")
+            if snapshot and len(snapshot) > 100:
+                # Verifica se há sobreposição significativa
+                common_lines = set(code_content.split("\n")) & set(snapshot.split("\n"))
+                if len(common_lines) > 50:
+                    score += 50
+                    reasons.append(f"{len(common_lines)}_linhas_comuns")
+            
+            # Mesmas dependências detectadas
+            current_deps = self._detect_dependencies(code_content)
+            past_deps = self._detect_dependencies(snapshot) if snapshot else set()
+            common_deps = current_deps & past_deps
+            if common_deps:
+                score += len(common_deps) * 10
+                reasons.append(f"deps_comuns:{','.join(common_deps)}")
+            
+            if score > 0:
+                protocol_copy = protocol.copy()
+                protocol_copy["similarity_score"] = score
+                protocol_copy["similarity_reasons"] = reasons
+                scored_protocols.append(protocol_copy)
+        
+        # Ordena por score decrescente
+        scored_protocols.sort(key=lambda x: x["similarity_score"], reverse=True)
+        return scored_protocols[:top_k]
+
+    def _detect_dependencies(self, code: str) -> set[str]:
+        """Extrai imports de pacotes do código Dart."""
+        deps = set()
+        import_pattern = r"import\s+['\"]package:(\w+)/"
+        for match in re.finditer(import_pattern, code):
+            deps.add(match.group(1))
+        return deps
+
+    def suggest_fixes_from_history(self, code_content: str) -> list[str]:
+        """
+        Sugere correções baseadas em protocolos de sucesso similares.
+        Retorna lista de fixes que funcionaram em códigos parecidos.
+        """
+        similar = self.find_similar_protocols(code_content)
+        if not similar:
+            return []
+        
+        all_fixes = []
+        for proto in similar:
+            fixes = proto.get("fixes_applied", [])
+            for fix in fixes:
+                if fix not in all_fixes:
+                    all_fixes.append(fix)
+        
+        if all_fixes:
+            self.log.info(f"🧠 Histórico sugere {len(all_fixes)} correção(ões) baseada(s) em {len(similar)} protocolo(s) similar(es)")
+        
+        return all_fixes
 
     # ── Pacotes conhecidos ───────────────────────
     def get_package_version(self, pkg: str) -> str | None:
@@ -1732,6 +1814,27 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
             # Análise prévia do código colado
             if source_type == "code":
+                # 🔍 VERIFICA SE É ATUALIZAÇÃO DE APP JÁ CONSTRUÍDO
+                similar_protocols = self.kb.find_similar_protocols(source_data) if self.kb else []
+                if similar_protocols:
+                    self.log.sep()
+                    self.log.ok(f"🔍 ATUALIZAÇÃO DETECTADA! Código similar a {len(similar_protocols)} build(s) anterior(es):")
+                    for i, proto in enumerate(similar_protocols, 1):
+                        score = proto.get("similarity_score", 0)
+                        reasons = proto.get("similarity_reasons", [])
+                        date = proto.get("date", "desconhecida")
+                        fixes = proto.get("fixes_applied", [])
+                        self.log.info(f"  [{i}] Score: {score} | Data: {date}")
+                        self.log.info(f"      Razões: {', '.join(reasons)}")
+                        if fixes:
+                            self.log.info(f"      Fixes aplicados antes: {', '.join(fixes)}")
+                    self.log.sep()
+                    
+                    # Sugere correções baseadas no histórico
+                    suggested_fixes = self.kb.suggest_fixes_from_history(source_data) if self.kb else []
+                    if suggested_fixes:
+                        self.log.info(f"🧠 Histórico sugere aplicar: {', '.join(suggested_fixes)}")
+                
                 issues = ProjectSourceManager._analyse_code_issues(source_data, self.log)
                 if issues:
                     self.log.sep()
@@ -1933,9 +2036,10 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 import hashlib
                 main_dart = project / "lib" / "main.dart"
                 code_hash = ""
+                code_content_full = ""
                 if main_dart.exists():
-                    code_content = main_dart.read_text(encoding="utf-8", errors="replace")
-                    code_hash = hashlib.sha256(code_content.encode()).hexdigest()[:16]
+                    code_content_full = main_dart.read_text(encoding="utf-8", errors="replace")
+                    code_hash = hashlib.sha256(code_content_full.encode()).hexdigest()[:16]
                 
                 # Registra quais correções foram aplicadas
                 fixes_used = []
@@ -1947,7 +2051,8 @@ class FlutterOrchestratorGUI(ctk.CTk):
                     build_type=self.build_type.get(),
                     fixes_applied=fixes_used,
                     elapsed_seconds=elapsed_seconds,
-                    code_hash=code_hash
+                    code_hash=code_hash,
+                    code_content=code_content_full  # Salva snapshot para comparação futura
                 )
             
             self.log.ok(f"APK: {apk}")
