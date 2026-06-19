@@ -131,5 +131,22 @@
     "crypto":               "^3.0.5",
     "collection":           "^1.19.0"
   },
-  "error_history": []
+  "error_history": [],
+  "success_protocols": [
+    {
+      "id": "20260619195145",
+      "date": "2026-06-19 19:51",
+      "source_type": "code",
+      "build_type": "release",
+      "fixes_applied": [
+        "just_audio usa LoopMode, não RepeatMode do Flutter",
+        "Switch em LoopMode sem case default — erro de exhaustiveness Dart 3",
+        "Switch em LoopMode sem case default — erro de exhaustiveness Dart 3"
+      ],
+      "elapsed_seconds": 674.29,
+      "code_hash": "a3f5c8d9e2b1f4a7",
+      "status": "success",
+      "notes": "Build bem-sucedido após correções de RepeatMode→LoopMode e adição de case default no switch. APK gerado com 45.4MB e instalado via ADB no dispositivo 6d92eed7."
+    }
+  ]
 }
