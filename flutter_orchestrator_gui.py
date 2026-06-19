@@ -1734,10 +1734,27 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 if not pub_ok:
                     self.log.warn("pub get falhou — tentando build mesmo assim...")
 
+                # Configurar gradle.properties para evitar crashes de memória
+                gradle_props = project / "android" / "gradle.properties"
+                if gradle_props.exists():
+                    content = gradle_props.read_text(encoding="utf-8")
+                    # Adicionar configurações de memória se não existirem
+                    if "org.gradle.jvmargs" not in content:
+                        content += "\n# Build Orchestrator settings\norg.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G -XX:+HeapDumpOnOutOfMemoryError\norg.gradle.daemon=false\norg.gradle.parallel=true\norg.gradle.configureondemand=true\n"
+                        gradle_props.write_text(content, encoding="utf-8")
+                        self.log.ok("gradle.properties configurado com mais memória (4GB)")
+
                 build_flag = "--" + self.build_type.get()
+                # Adicionar flags de resiliência ao build
+                build_args = ["build", "apk", build_flag, "--no-pub"]
+                
+                # Em builds release, adicionar flag para reduzir tempo e memória
+                if self.build_type.get() == "release":
+                    build_args.append("--shrink")
+                
                 self._set_status(f"Compilando APK {self.build_type.get()}...", "#ffc107")
                 build_ok, build_errors = runner.flutter_cmd_with_errors(
-                    ["build", "apk", build_flag], project)
+                    build_args, project)
 
                 if build_ok:
                     apk = self._find_apk(project)
