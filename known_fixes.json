@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "version": "1.0",
-    "description": "Cérebro do OrquestradorAPK — erros conhecidos e suas correções. Cresce automaticamente a cada novo erro resolvido.",
+    "version": "1.1",
+    "description": "Cérebro do OrquestradorAPK — erros conhecidos, protocolos de sucesso e correções. Cresce automaticamente a cada novo erro resolvido e build bem-sucedido.",
     "total_fixes_applied": 0,
     "last_updated": "2026-06-19"
   },

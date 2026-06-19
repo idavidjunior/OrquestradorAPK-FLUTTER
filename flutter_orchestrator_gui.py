@@ -434,6 +434,41 @@ class KnowledgeBase:
         except Exception as e:
             self.log.warn(f"🧠 Não foi possível aprender deste fix: {e}")
 
+    # ── Aprender com protocolos de sucesso ────────
+    def learn_success_protocol(self, source_type: str, build_type: str,
+                               fixes_applied: list[str], elapsed_seconds: float,
+                               code_hash: str):
+        """
+        Quando um build tem sucesso, registra o protocolo bem-sucedido
+        para aprendizado futuro e replicação.
+        """
+        try:
+            protocol = {
+                "id": datetime.now().strftime("%Y%m%d%H%M%S"),
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "source_type": source_type,
+                "build_type": build_type,
+                "fixes_applied": fixes_applied,
+                "elapsed_seconds": round(elapsed_seconds, 2),
+                "code_hash": code_hash,
+                "status": "success"
+            }
+            
+            self._db.setdefault("success_protocols", []).append(protocol)
+            
+            # Mantém apenas os últimos 100 protocolos para não inflar o JSON
+            protocols = self._db.get("success_protocols", [])
+            if len(protocols) > 100:
+                self._db["success_protocols"] = protocols[-100:]
+            
+            self.log.ok(f"🧠 Protocolo de sucesso registrado: {fixes_applied if fixes_applied else 'build limpo'}")
+            self.log.info(f"   Tempo: {elapsed_seconds:.1f}s | Total de protocolos: {len(self._db['success_protocols'])}")
+            
+            self._save()
+            
+        except Exception as e:
+            self.log.warn(f"🧠 Não foi possível registrar protocolo de sucesso: {e}")
+
     # ── Pacotes conhecidos ───────────────────────
     def get_package_version(self, pkg: str) -> str | None:
         return self._db.get("package_versions", {}).get(pkg)
@@ -450,14 +485,16 @@ class KnowledgeBase:
         meta   = self._db.get("_meta", {})
         fixes  = self._db.get("fixes", [])
         hist   = self._db.get("error_history", [])
+        success_protocols = self._db.get("success_protocols", [])
         manual = sum(1 for f in fixes if f.get("source") == "manual")
         learned= sum(1 for f in fixes if f.get("source") == "gemini")
         return {
-            "total_fixes":    len(fixes),
-            "manual_fixes":   manual,
-            "learned_fixes":  learned,
-            "total_applied":  meta.get("total_fixes_applied", 0),
-            "history_count":  len(hist),
+            "total_fixes":       len(fixes),
+            "manual_fixes":      manual,
+            "learned_fixes":     learned,
+            "total_applied":     meta.get("total_fixes_applied", 0),
+            "history_count":     len(hist),
+            "success_protocols": len(success_protocols),
         }
 
 
@@ -1888,6 +1925,31 @@ class FlutterOrchestratorGUI(ctk.CTk):
             self.log.info("[5/5] Entregando APK...")
             self.last_apk = apk
             elapsed = datetime.now() - start
+            elapsed_seconds = elapsed.total_seconds()
+            
+            # Aprende com o sucesso do protocolo
+            if local_ok and self.kb:
+                # Calcula hash do código para referência futura
+                import hashlib
+                main_dart = project / "lib" / "main.dart"
+                code_hash = ""
+                if main_dart.exists():
+                    code_content = main_dart.read_text(encoding="utf-8", errors="replace")
+                    code_hash = hashlib.sha256(code_content.encode()).hexdigest()[:16]
+                
+                # Registra quais correções foram aplicadas
+                fixes_used = []
+                if kb_applied if 'kb_applied' in locals() else False:
+                    fixes_used.extend([f"KB:{f}" for f in kb_applied])
+                
+                self.kb.learn_success_protocol(
+                    source_type=source_type,
+                    build_type=self.build_type.get(),
+                    fixes_applied=fixes_used,
+                    elapsed_seconds=elapsed_seconds,
+                    code_hash=code_hash
+                )
+            
             self.log.ok(f"APK: {apk}")
             self.log.ok(f"Tempo total: {elapsed}")
             self.log.sep()
