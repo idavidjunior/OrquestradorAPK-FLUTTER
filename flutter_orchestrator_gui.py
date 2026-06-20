@@ -745,31 +745,31 @@ class CodeFixer:
         
         # Extrair blocos YAML (pubspec.yaml)
         yaml_pattern = r'(name:\s*\w+[\s\S]*?(?=^import|\Z))'
-        for m in _re.finditer(yaml_pattern, code, _re.MULTILINE):
+        for m in re.finditer(yaml_pattern, code, re.MULTILINE):
             placeholder = f"__YAML_BLOCK_{len(yaml_blocks)}__"
             yaml_blocks.append(m.group(1))
             code = code.replace(m.group(1), placeholder, 1)
         
         # Extrair blocos XML (AndroidManifest)
         xml_pattern = r'(<uses-permission[\s\S]*?/?>)'
-        for m in _re.finditer(xml_pattern, code):
+        for m in re.finditer(xml_pattern, code):
             placeholder = f"__XML_BLOCK_{len(xml_blocks)}__"
             xml_blocks.append(m.group(1))
             code = code.replace(m.group(1), placeholder, 1)
         
         # 2. Corrigir chamadas nativas Android incorretas no Dart
         # Substituir Build.VERSION.SDK_INT por Platform.version ou remover
-        code = _re.sub(r'Build\.VERSION\.SDK_INT', 'Platform.version.length', code)
-        code = _re.sub(r'if\s*\(\s*Platform\.version\.length\s*>=\s*(\d+)\s*\)', 
+        code = re.sub(r'Build\.VERSION\.SDK_INT', 'Platform.version.length', code)
+        code = re.sub(r'if\s*\(\s*Platform\.version\.length\s*>=\s*(\d+)\s*\)', 
                       r'// Verificação de versão Android removida para compatibilidade', code)
         
         # Substituir MediaStore() por null ou comentário
-        code = _re.sub(r'MediaStore\(\)', 'null /* MediaStore requer configuração adicional */', code)
+        code = re.sub(r'MediaStore\(\)', 'null /* MediaStore requer configuração adicional */', code)
         
         # 3. Corrigir 'if' condicional dentro de builders Flutter
         # Padrão problemático: Row(children: [ if (cond) Widget ])
         # Às vezes falta parêntese ou vírgula
-        code = _re.sub(
+        code = re.sub(
             r'Row\s*\(\s*children\s*:\s*\[\s*if\s*\(([^)]+)\)\s+([A-Z]\w*)',
             r'Row(children: [if (\1) \2',
             code
@@ -1180,9 +1180,9 @@ class ProjectSourceManager:
                     fixes.append("Adicionado case default no switch de LoopMode")
                 return block
             # Regex mais robusto para capturar switch completo
-            code = _re.sub(
+            code = re.sub(
                 r'switch\s*\([^)]+\)\s*\{(?:[^{}]|\{[^{}]*\})*\}',
-                _add_default, code, flags=_re.DOTALL
+                _add_default, code, flags=re.DOTALL
             )
 
         # Auto-correção de Sintaxe (Parênteses e Ifs)
