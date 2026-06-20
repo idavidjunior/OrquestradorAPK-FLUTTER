@@ -831,6 +831,33 @@ class ProjectSourceManager:
         return warnings
 
     @staticmethod
+    def _fix_dart_syntax_errors(code: str) -> str:
+        """Tenta corrigir erros comuns de sintaxe Dart automaticamente."""
+        lines = code.split('\n')
+        fixed_lines = []
+        
+        for i, line in enumerate(lines):
+            # 1. Corrigir 'if' solto dentro de listas/coleções (comum em Flutter)
+            # Padrão: "            if (cond) Widget(" vira "            if (cond) Widget(),"
+            if re.search(r'\s+if\s*\([^)]+\)\s+\w+\s*\(', line) and not line.rstrip().endswith(','):
+                # Verifica se parece estar dentro de uma lista de children
+                if any('children' in l for l in lines[max(0, i-5):i]):
+                    line = line.rstrip() + ','
+            
+            # 2. Balanceamento básico de parênteses em linhas muito longas
+            open_p = line.count('(')
+            close_p = line.count(')')
+            if open_p > close_p and open_p > 2:
+                needed = open_p - close_p
+                # Só adiciona se a linha terminar com construtor de widget
+                if re.search(r'\w+\(', line.rstrip()):
+                    line = line.rstrip() + (')' * needed)
+            
+            fixed_lines.append(line)
+        
+        return '\n'.join(fixed_lines)
+
+    @staticmethod
     def _apply_static_fixes(code: str, log: Logger) -> tuple[str, list[str]]:
         """
         Aplica correções estáticas conhecidas sem precisar da API Gemini.
@@ -873,6 +900,12 @@ class ProjectSourceManager:
                 r'switch\s*\([^)]+\)\s*\{(?:[^{}]|\{[^{}]*\})*\}',
                 _add_default, code, flags=_re.DOTALL
             )
+
+        # Auto-correção de Sintaxe (Parênteses e Ifs)
+        code_before_syntax = code
+        code = CodeFixer._fix_dart_syntax_errors(code)
+        if code != code_before_syntax:
+            fixes.append("Correção automática de sintaxe Dart (parênteses/if)")
 
         if code != original:
             log.ok(f"Correções estáticas aplicadas: {', '.join(fixes)}")
