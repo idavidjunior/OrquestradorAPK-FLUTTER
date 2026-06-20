@@ -105,13 +105,23 @@ class FlutterOrchestrator:
         try:
             if archive_path.suffix == '.zip':
                 with zipfile.ZipFile(archive_path, 'r') as zip_ref:
-                    zip_ref.extractall(dest_dir)
+                    for member in zip_ref.namelist():
+                        # Protege contra path traversal (CVE-2007-4559)
+                        if '..' in member or member.startswith('/'):
+                            log_warning(f"Arquivo suspeito ignorado: {member}")
+                            continue
+                        zip_ref.extract(member, dest_dir)
             elif archive_path.suffix in ['.tar', '.gz', '.xz']:
                 mode = 'r:xz' if archive_path.suffix == '.xz' else 'r:gz'
                 if archive_path.suffix == '.tar':
                     mode = 'r:'
                 with tarfile.open(archive_path, mode) as tar_ref:
-                    tar_ref.extractall(dest_dir)
+                    for member in tar_ref.getmembers():
+                        # Protege contra path traversal
+                        if '..' in member.name or member.name.startswith('/'):
+                            log_warning(f"Arquivo suspeito ignorado: {member.name}")
+                            continue
+                        tar_ref.extract(member, dest_dir)
             
             log_success("Extração concluída.")
             return True
