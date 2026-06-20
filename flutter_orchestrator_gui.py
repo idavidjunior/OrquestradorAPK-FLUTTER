@@ -49,6 +49,98 @@ ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
 # ─────────────────────────────────────────────────────────────
+#  ContextAnalyzer — Detecta tipo do app e aplica configurações
+# ─────────────────────────────────────────────────────────────
+class ContextAnalyzer:
+    """
+    Analisa o código fonte para identificar o tipo de aplicativo
+    e aplicar configurações automáticas (permissões, dependências, etc.)
+    """
+    
+    # Mapeamento de padrões para tipos de aplicativos
+    APP_PATTERNS = {
+        'MEDIA_PLAYER': {
+            'keywords': ['AudioPlayer', 'just_audio', 'audioplayers', 'MusicPlayer', 'Song', 'Playlist', 'Playback', '_PlayerScreen'],
+            'permissions': [
+                'android.permission.READ_MEDIA_AUDIO',
+                'android.permission.READ_EXTERNAL_STORAGE',
+                'android.permission.WRITE_EXTERNAL_STORAGE'
+            ],
+            'dependencies': ['audio_session: ^0.2.3'],
+            'description': 'Reprodutor de Música/Mídia'
+        },
+        'CAMERA_APP': {
+            'keywords': ['CameraController', 'camera', 'ImagePicker', 'takePicture', 'startVideoRecording'],
+            'permissions': [
+                'android.permission.CAMERA',
+                'android.permission.RECORD_AUDIO'
+            ],
+            'dependencies': ['camera: ^0.11.0', 'image_picker: ^1.0.0'],
+            'description': 'Aplicativo de Câmera'
+        },
+        'MAPS_APP': {
+            'keywords': ['GoogleMap', 'MapController', 'google_maps_flutter', 'Marker', 'Polyline', 'Location'],
+            'permissions': [
+                'android.permission.ACCESS_FINE_LOCATION',
+                'android.permission.ACCESS_COARSE_LOCATION'
+            ],
+            'dependencies': ['google_maps_flutter: ^2.5.0', 'location: ^5.0.0'],
+            'description': 'Aplicativo com Mapas'
+        },
+        'CALCULATOR': {
+            'keywords': ['Calculator', 'calculate', 'math', 'expression', 'eval'],
+            'permissions': [],
+            'dependencies': ['math_expressions: ^2.4.0'],
+            'description': 'Calculadora'
+        },
+        'FIREBASE_APP': {
+            'keywords': ['Firebase', 'firebase_core', 'Firestore', 'Auth', 'Database', 'Storage'],
+            'permissions': ['android.permission.INTERNET'],
+            'dependencies': ['firebase_core: ^2.24.0', 'cloud_firestore: ^4.14.0'],
+            'description': 'App com Firebase'
+        },
+        'CHAT_APP': {
+            'keywords': ['Chat', 'Message', 'WebSocket', 'Socket', 'Realtime', 'Conversation'],
+            'permissions': ['android.permission.INTERNET'],
+            'dependencies': ['websocket: ^0.0.3'],
+            'description': 'Aplicativo de Chat'
+        }
+    }
+    
+    def __init__(self, code: str):
+        self.code = code
+        self.detected_types = []
+        self.required_permissions = set()
+        self.suggested_dependencies = set()
+        
+    def analyze(self) -> dict:
+        """Analisa o código e retorna informações sobre o contexto"""
+        for app_type, config in self.APP_PATTERNS.items():
+            score = 0
+            for keyword in config['keywords']:
+                if keyword.lower() in self.code.lower():
+                    score += 1
+            
+            # Se encontrou pelo menos 2 palavras-chave, considera relevante
+            if score >= 2:
+                self.detected_types.append(app_type)
+                self.required_permissions.update(config['permissions'])
+                self.suggested_dependencies.update(config['dependencies'])
+        
+        return {
+            'detected_types': self.detected_types,
+            'permissions': list(self.required_permissions),
+            'dependencies': list(self.suggested_dependencies),
+            'descriptions': [self.APP_PATTERNS[t]['description'] for t in self.detected_types]
+        }
+    
+    @staticmethod
+    def from_code(code: str) -> 'ContextAnalyzer':
+        """Factory method para criar analyzer a partir do código"""
+        return ContextAnalyzer(code)
+
+
+# ─────────────────────────────────────────────────────────────
 #  Logger — fila thread-safe, drenada por timer independente
 # ─────────────────────────────────────────────────────────────
 class Logger:
