@@ -1,40 +1,12 @@
-```
+```gitignore
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
+
+# Logs and temp files
 *.log
-.DS_Store
-Thumbs.db
-
-# Flutter
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
-build/
-ios/.symlinks
-lib/generated/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
 *.tmp
 
 # Environment
@@ -42,12 +14,26 @@ lib/generated/
 .env.local
 *.env.*
 
+# Editors
+.vscode/
+.idea/
+
 # Dependencies
+.venv/
+venv/
 node_modules/
+
+# Build artifacts
+dist/
+build/
 target/
-.gradle/
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Cache
 .mypy_cache/
 .pytest_cache/
-htmlcov/
-coverage/
 ```
