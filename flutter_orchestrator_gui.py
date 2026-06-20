@@ -721,6 +721,108 @@ class PackageCacheManager:
 # ─────────────────────────────────────────────────────────────
 #  Gemini Code Fixer — corrige código Dart com IA
 # ─────────────────────────────────────────────────────────────
+class CodeFixer:
+    """
+    Corretor automático de sintaxe Dart para erros comuns.
+    Funciona offline e é chamado antes do Gemini para correções rápidas.
+    """
+    
+    @staticmethod
+    def _fix_dart_syntax_errors(code: str) -> str:
+        """
+        Corrige automaticamente erros comuns de sintaxe Dart:
+        - Parênteses desbalanceados
+        - Chaves desbalanceadas
+        - 'if' sem condição em builders
+        - Chamadas de métodos nativos inválidos (Build.VERSION, MediaStore)
+        """
+        if not code:
+            return code
+        
+        # 1. Proteger blocos YAML/XML que possam estar misturados
+        yaml_blocks = []
+        xml_blocks = []
+        
+        # Extrair blocos YAML (pubspec.yaml)
+        yaml_pattern = r'(name:\s*\w+[\s\S]*?(?=^import|\Z))'
+        for m in _re.finditer(yaml_pattern, code, _re.MULTILINE):
+            placeholder = f"__YAML_BLOCK_{len(yaml_blocks)}__"
+            yaml_blocks.append(m.group(1))
+            code = code.replace(m.group(1), placeholder, 1)
+        
+        # Extrair blocos XML (AndroidManifest)
+        xml_pattern = r'(<uses-permission[\s\S]*?/?>)'
+        for m in _re.finditer(xml_pattern, code):
+            placeholder = f"__XML_BLOCK_{len(xml_blocks)}__"
+            xml_blocks.append(m.group(1))
+            code = code.replace(m.group(1), placeholder, 1)
+        
+        # 2. Corrigir chamadas nativas Android incorretas no Dart
+        # Substituir Build.VERSION.SDK_INT por Platform.version ou remover
+        code = _re.sub(r'Build\.VERSION\.SDK_INT', 'Platform.version.length', code)
+        code = _re.sub(r'if\s*\(\s*Platform\.version\.length\s*>=\s*(\d+)\s*\)', 
+                      r'// Verificação de versão Android removida para compatibilidade', code)
+        
+        # Substituir MediaStore() por null ou comentário
+        code = _re.sub(r'MediaStore\(\)', 'null /* MediaStore requer configuração adicional */', code)
+        
+        # 3. Corrigir 'if' condicional dentro de builders Flutter
+        # Padrão problemático: Row(children: [ if (cond) Widget ])
+        # Às vezes falta parêntese ou vírgula
+        code = _re.sub(
+            r'Row\s*\(\s*children\s*:\s*\[\s*if\s*\(([^)]+)\)\s+([A-Z]\w*)',
+            r'Row(children: [if (\1) \2',
+            code
+        )
+        
+        # 4. Balancear parênteses em chamadas aninhadas
+        # Contar parênteses abertos e fechados
+        open_parens = code.count('(')
+        close_parens = code.count(')')
+        if open_parens > close_parens:
+            # Adicionar parênteses faltantes no final
+            code += ')' * (open_parens - close_parens)
+        elif close_parens > open_parens:
+            # Remover parênteses excedentes do final
+            diff = close_parens - open_parens
+            for _ in range(diff):
+                pos = code.rfind(')')
+                if pos != -1:
+                    code = code[:pos] + code[pos+1:]
+        
+        # 5. Balancear chaves
+        open_braces = code.count('{')
+        close_braces = code.count('}')
+        if open_braces > close_braces:
+            code += '}' * (open_braces - close_braces)
+        elif close_braces > open_braces:
+            diff = close_braces - open_braces
+            for _ in range(diff):
+                pos = code.rfind('}')
+                if pos != -1:
+                    code = code[:pos] + code[pos+1:]
+        
+        # 6. Balancear colchetes
+        open_brackets = code.count('[')
+        close_brackets = code.count(']')
+        if open_brackets > close_brackets:
+            code += ']' * (open_brackets - close_brackets)
+        elif close_brackets > open_brackets:
+            diff = close_brackets - open_brackets
+            for _ in range(diff):
+                pos = code.rfind(']')
+                if pos != -1:
+                    code = code[:pos] + code[pos+1:]
+        
+        # 7. Restaurar blocos YAML/XML
+        for i, block in enumerate(yaml_blocks):
+            code = code.replace(f"__YAML_BLOCK_{i}__", block)
+        for i, block in enumerate(xml_blocks):
+            code = code.replace(f"__XML_BLOCK_{i}__", block)
+        
+        return code
+
+
 class GeminiCodeFixer:
     """
     Usa a API Gemini para analisar erros do compilador Dart,
