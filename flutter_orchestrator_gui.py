@@ -847,8 +847,9 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
         if not api_key:
             return False, "Chave vazia"
         
-        if not api_key.startswith("AI"):
-            return False, "Formato inválido (deve começar com 'AI')"
+        # Chaves do Google Gemini sempre começam com 'AIza'
+        if not api_key.startswith("AIza"):
+            return False, "Formato inválido (deve começar com 'AIza')"
         
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
