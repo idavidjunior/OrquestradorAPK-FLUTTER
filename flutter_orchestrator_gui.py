@@ -377,6 +377,11 @@ class KnowledgeBase:
                     code    = new_code
                     changed = True
 
+            elif fix_type == "android_gradle_fix":
+                # Corrige erro de namespace no build.gradle de plugins Android
+                if project_dir:
+                    changed = self._fix_android_gradle_namespace(project_dir, errors, self.log)
+
             if changed and fix_type != "info_only":
                 applied.append(desc)
                 fix["times_applied"] = fix.get("times_applied", 0) + 1
@@ -460,6 +465,74 @@ class KnowledgeBase:
             pv[pkg] = version
             self.log.info(f"🧠 Novo pacote aprendido: {pkg}: {version}")
             self._save()
+
+    def _fix_android_gradle_namespace(self, project_dir: Path, errors: list[str], log: Logger) -> bool:
+        """
+        Corrige erro de namespace no build.gradle de plugins Android.
+        Detecta plugins sem namespace e adiciona automaticamente baseado no AndroidManifest.xml.
+        """
+        try:
+            error_text = "\n".join(errors)
+            
+            # Extrai o caminho do build.gradle problemático do erro
+            build_gradle_match = re.search(r'([A-Z]:\\[^:]+\\android\\build\.gradle)', error_text)
+            if not build_gradle_match:
+                log.warn("🧠 Não foi possível extrair caminho do build.gradle do erro")
+                return False
+            
+            build_gradle_path = Path(build_gradle_match.group(1))
+            if not build_gradle_path.exists():
+                log.warn(f"🧠 build.gradle não encontrado: {build_gradle_path}")
+                return False
+            
+            # Lê o build.gradle atual
+            build_gradle_content = build_gradle_path.read_text(encoding="utf-8")
+            
+            # Verifica se já tem namespace
+            if "namespace" in build_gradle_content:
+                log.info(f"🧠 build.gradle já tem namespace: {build_gradle_path}")
+                return False
+            
+            # Tenta encontrar o AndroidManifest.xml do plugin
+            android_manifest_path = build_gradle_path.parent / "src" / "main" / "AndroidManifest.xml"
+            if not android_manifest_path.exists():
+                log.warn(f"🧠 AndroidManifest.xml não encontrado: {android_manifest_path}")
+                return False
+            
+            # Extrai o package do AndroidManifest.xml
+            manifest_content = android_manifest_path.read_text(encoding="utf-8")
+            package_match = re.search(r'package="([^"]+)"', manifest_content)
+            if not package_match:
+                log.warn("🧠 Não foi possível extrair package do AndroidManifest.xml")
+                return False
+            
+            package_name = package_match.group(1)
+            
+            # Adiciona namespace ao build.gradle
+            # Procura pelo bloco android { ... }
+            android_block_match = re.search(r'android\s*\{', build_gradle_content)
+            if not android_block_match:
+                log.warn("🧠 Não foi possível encontrar bloco android no build.gradle")
+                return False
+            
+            # Insere namespace após o bloco android {
+            insert_pos = android_block_match.end()
+            new_build_gradle = (
+                build_gradle_content[:insert_pos] + 
+                f'\n    namespace \'{package_name}\'' +
+                build_gradle_content[insert_pos:]
+            )
+            
+            # Escreve o build.gradle corrigido
+            build_gradle_path.write_text(new_build_gradle, encoding="utf-8")
+            
+            log.ok(f"🧠 Namespace adicionado ao build.gradle: {package_name}")
+            log.ok(f"🧠 Arquivo corrigido: {build_gradle_path}")
+            return True
+            
+        except Exception as e:
+            log.err(f"🧠 Erro ao corrigir namespace do Android Gradle Plugin: {e}")
+            return False
 
     def stats(self) -> dict:
         meta   = self._db.get("_meta", {})
