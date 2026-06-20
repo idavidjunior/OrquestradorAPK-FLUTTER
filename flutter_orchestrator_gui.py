@@ -2156,6 +2156,30 @@ class FlutterOrchestratorGUI(ctk.CTk):
             except Exception as local_err:
                 self.log.warn(f"Exceção no build local: {local_err}")
 
+            # ── ETAPA 3a: Correção automática de namespace do Android Gradle Plugin ──
+            if not local_ok and build_errors:
+                error_text = "\n".join(build_errors)
+                if "Namespace not specified" in error_text and "build.gradle" in error_text:
+                    self.log.sep()
+                    self.log.info("[3a] 🔧 Detectado erro de namespace do Android Gradle Plugin...")
+                    self._set_status("🔧 Corrigindo namespace do Android Gradle Plugin...", "#ff9800")
+                    
+                    if self._fix_android_gradle_namespace_errors(build_errors, project):
+                        self.log.ok("🔧 Namespace corrigido — recompilando...")
+                        runner.flutter_cmd(["clean"], project, fail_on_error=False)
+                        runner.flutter_cmd(["pub", "get"], project)
+                        build_ok, build_errors = runner.flutter_cmd_with_errors(
+                            ["build", "apk", build_flag], project)
+                        if build_ok:
+                            apk = self._find_apk(project)
+                            if apk:
+                                local_ok = True
+                                self.log.ok("Build local concluído após correção de namespace!")
+                            else:
+                                self.log.warn("Build terminou mas APK não foi encontrado")
+                        else:
+                            self.log.warn("Build ainda falha após correção de namespace")
+
             # ── ETAPA 3b: KnowledgeBase (grátis, sem API) ──
             if not local_ok and build_errors:
                 self.log.sep()
@@ -2320,6 +2344,66 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 self.progress.stop(),
                 self.progress.set(0),
             ))
+
+    @staticmethod
+    def _fix_android_gradle_namespace_errors(build_errors: list[str], project_dir: Path) -> bool:
+        """
+        Corrige erros de namespace do Android Gradle Plugin em plugins.
+        Detecta plugins sem namespace e adiciona automaticamente baseado no AndroidManifest.xml.
+        """
+        try:
+            error_text = "\n".join(build_errors)
+            
+            # Extrai o caminho do build.gradle problemático do erro
+            build_gradle_match = re.search(r'([A-Z]:\\[^:]+\\android\\build\.gradle)', error_text)
+            if not build_gradle_match:
+                return False
+            
+            build_gradle_path = Path(build_gradle_match.group(1))
+            if not build_gradle_path.exists():
+                return False
+            
+            # Lê o build.gradle atual
+            build_gradle_content = build_gradle_path.read_text(encoding="utf-8")
+            
+            # Verifica se já tem namespace
+            if "namespace" in build_gradle_content:
+                return False
+            
+            # Tenta encontrar o AndroidManifest.xml do plugin
+            android_manifest_path = build_gradle_path.parent / "src" / "main" / "AndroidManifest.xml"
+            if not android_manifest_path.exists():
+                return False
+            
+            # Extrai o package do AndroidManifest.xml
+            manifest_content = android_manifest_path.read_text(encoding="utf-8")
+            package_match = re.search(r'package="([^"]+)"', manifest_content)
+            if not package_match:
+                return False
+            
+            package_name = package_match.group(1)
+            
+            # Adiciona namespace ao build.gradle
+            # Procura pelo bloco android { ... }
+            android_block_match = re.search(r'android\s*\{', build_gradle_content)
+            if not android_block_match:
+                return False
+            
+            # Insere namespace após o bloco android {
+            insert_pos = android_block_match.end()
+            new_build_gradle = (
+                build_gradle_content[:insert_pos] + 
+                f'\n    namespace \'{package_name}\'' +
+                build_gradle_content[insert_pos:]
+            )
+            
+            # Escreve o build.gradle corrigido
+            build_gradle_path.write_text(new_build_gradle, encoding="utf-8")
+            
+            return True
+            
+        except Exception:
+            return False
 
     @staticmethod
     def _find_apk(project: Path) -> str | None:
