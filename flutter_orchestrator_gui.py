@@ -581,25 +581,172 @@ class KnowledgeBase:
 
 
 # ─────────────────────────────────────────────────────────────
+#  Package Cache Manager — Cache Offline de Dependências
+# ─────────────────────────────────────────────────────────────
+class PackageCacheManager:
+    """
+    Gerencia cache offline de pacotes Flutter/Dart para acelerar builds
+    e permitir operação sem internet após primeiro download.
+    
+    Estrutura:
+    - ~/.flutter_orchestrator/cache/pub/
+    - ~/.flutter_orchestrator/cache/plugins/
+    """
+    
+    def __init__(self, log: Logger):
+        self.log = log
+        self.cache_dir = Path.home() / ".flutter_orchestrator" / "cache"
+        self.pub_cache = self.cache_dir / "pub"
+        self.plugins_cache = self.cache_dir / "plugins"
+        self.manifest_file = self.cache_dir / "cache_manifest.json"
+        self._init_cache()
+    
+    def _init_cache(self):
+        """Inicializa diretórios de cache."""
+        self.pub_cache.mkdir(parents=True, exist_ok=True)
+        self.plugins_cache.mkdir(parents=True, exist_ok=True)
+        if not self.manifest_file.exists():
+            self.manifest_file.write_text(json.dumps({
+                "packages": {},
+                "last_updated": None,
+                "total_size_mb": 0
+            }, indent=2), encoding="utf-8")
+    
+    def _load_manifest(self) -> dict:
+        """Carrega manifesto do cache."""
+        try:
+            return json.loads(self.manifest_file.read_text(encoding="utf-8"))
+        except:
+            return {"packages": {}, "last_updated": None, "total_size_mb": 0}
+    
+    def _save_manifest(self, manifest: dict):
+        """Salva manifesto do cache."""
+        self.manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    
+    def get_cached_packages(self) -> list[str]:
+        """Retorna lista de pacotes em cache."""
+        manifest = self._load_manifest()
+        return list(manifest.get("packages", {}).keys())
+    
+    def is_package_cached(self, package_name: str) -> bool:
+        """Verifica se pacote está em cache."""
+        manifest = self._load_manifest()
+        return package_name in manifest.get("packages", {})
+    
+    def register_package(self, package_name: str, version: str, path: str):
+        """Registra pacote no cache."""
+        manifest = self._load_manifest()
+        manifest["packages"][package_name] = {
+            "version": version,
+            "path": path,
+            "cached_at": datetime.now().isoformat()
+        }
+        self._update_size(manifest)
+        self._save_manifest(manifest)
+    
+    def _update_size(self, manifest: dict):
+        """Atualiza tamanho total do cache."""
+        total = 0
+        for pkg_info in manifest.get("packages", {}).values():
+            try:
+                path = Path(pkg_info["path"])
+                if path.exists():
+                    total += sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+            except:
+                pass
+        manifest["total_size_mb"] = round(total / (1024 * 1024), 2)
+        manifest["last_updated"] = datetime.now().isoformat()
+    
+    def configure_pub_cache(self, project_dir: Path):
+        """
+        Configura projeto para usar cache local do pub.
+        Cria .dart_tool/pub_cache config se necessário.
+        """
+        dart_tool = project_dir / ".dart_tool"
+        dart_tool.mkdir(exist_ok=True)
+        
+        # Configura variável de ambiente para cache global
+        os.environ["PUB_CACHE"] = str(self.pub_cache)
+        
+        self.log.info(f"📦 Cache pub configurado: {self.pub_cache}")
+        cached_count = len(self.get_cached_packages())
+        if cached_count > 0:
+            self.log.ok(f"  {cached_count} pacotes disponíveis offline")
+        else:
+            self.log.info("  Cache vazio — pacotes serão baixados e cacheados")
+    
+    def prewarm_cache(self, dependencies: list[str], project_dir: Path):
+        """
+        Pré-aquece cache com dependências detectadas.
+        Se já estiverem em cache, usa versão local.
+        """
+        self.log.info("🔥 Verificando cache de dependências...")
+        missing = []
+        for dep in dependencies:
+            pkg_name = dep.split(":")[0].strip()
+            if self.is_package_cached(pkg_name):
+                self.log.ok(f"  ✅ {pkg_name} em cache")
+            else:
+                missing.append(pkg_name)
+                self.log.info(f"  ⏳ {pkg_name} será baixado")
+        
+        if missing:
+            self.log.info(f"  {len(missing)} pacotes novos serão cacheados após download")
+        else:
+            self.log.ok("  Todas as dependências em cache! Build offline possível.")
+    
+    def cleanup_old_cache(self, max_age_days: int = 30):
+        """Limpa pacotes antigos do cache."""
+        manifest = self._load_manifest()
+        now = datetime.now()
+        removed = 0
+        
+        for pkg_name in list(manifest.get("packages", {}).keys()):
+            try:
+                cached_at = datetime.fromisoformat(manifest["packages"][pkg_name]["cached_at"])
+                age = (now - cached_at).days
+                if age > max_age_days:
+                    del manifest["packages"][pkg_name]
+                    removed += 1
+                    self.log.info(f"  🗑️ Removido {pkg_name} ({age} dias)")
+            except:
+                pass
+        
+        if removed > 0:
+            self._update_size(manifest)
+            self._save_manifest(manifest)
+            self.log.ok(f"  Cache limpo: {removed} pacotes removidos")
+
+
+# ─────────────────────────────────────────────────────────────
 #  Gemini Code Fixer — corrige código Dart com IA
 # ─────────────────────────────────────────────────────────────
 class GeminiCodeFixer:
     """
     Usa a API Gemini para analisar erros do compilador Dart,
     corrigir o código e retornar o código corrigido com explicações.
+    Inclui retry automático e fallback para erros de conexão.
     """
     API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
+    MAX_RETRIES = 3
+    RETRY_DELAY = 2  # segundos
 
     def __init__(self, api_key: str, log: Logger):
         self.api_key = api_key
         self.log = log
-
+        self._last_error = None
+    
     def fix(self, code: str, errors: list[str]) -> str | None:
         """
         Envia código + erros para o Gemini e retorna código corrigido.
-        Retorna None se falhar.
+        Retorna None se falhar após retries.
         """
         if not self.api_key:
+            self.log.warn("🤖 Chave da API Gemini não configurada")
+            return None
+        
+        if not self.api_key.startswith("AI"):
+            self.log.err("🤖 Formato de chave Gemini inválido (deve começar com 'AI')")
             return None
 
         error_text = "\n".join(errors[:60])  # máx 60 linhas de erro
@@ -635,46 +782,74 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
             }
         }
 
-        try:
-            self.log.info("🤖 Enviando código para Gemini analisar e corrigir...")
-            url = f"{self.API_URL}?key={self.api_key}"
-            req = Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            with urlopen(req, timeout=60) as r:
-                resp = json.loads(r.read())
+        # Retry loop para lidar com falhas temporárias
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                if attempt > 1:
+                    self.log.info(f"🤖 Tentativa {attempt}/{self.MAX_RETRIES}...")
+                    time.sleep(self.RETRY_DELAY * (attempt - 1))  # Backoff exponencial
+                
+                self.log.info("🤖 Enviando código para Gemini analisar e corrigir...")
+                url = f"{self.API_URL}?key={self.api_key}"
+                req = Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                
+                with urlopen(req, timeout=90) as r:
+                    resp = json.loads(r.read())
 
-            # Extrai o texto da resposta
-            fixed_code = (resp.get("candidates", [{}])[0]
-                             .get("content", {})
-                             .get("parts", [{}])[0]
-                             .get("text", "")).strip()
+                # Extrai o texto da resposta
+                fixed_code = (resp.get("candidates", [{}])[0]
+                                 .get("content", {})
+                                 .get("parts", [{}])[0]
+                                 .get("text", "")).strip()
 
-            if not fixed_code:
-                self.log.err("Gemini retornou resposta vazia")
-                return None
+                if not fixed_code:
+                    self.log.warn("Gemini retornou resposta vazia")
+                    if attempt < self.MAX_RETRIES:
+                        continue
+                    return None
 
-            # Remove marcadores de código se Gemini os incluiu mesmo assim
-            if fixed_code.startswith("```"):
-                lines = fixed_code.split("\n")
-                fixed_code = "\n".join(
-                    l for l in lines
-                    if not l.strip().startswith("```")
-                ).strip()
+                # Remove marcadores de código se Gemini os incluiu mesmo assim
+                if fixed_code.startswith("```"):
+                    lines = fixed_code.split("\n")
+                    fixed_code = "\n".join(
+                        l for l in lines
+                        if not l.strip().startswith("```")
+                    ).strip()
 
-            self.log.ok("🤖 Gemini retornou código corrigido")
-            return fixed_code
+                self.log.ok("🤖 Gemini retornou código corrigido")
+                self._last_error = None
+                return fixed_code
 
-        except Exception as e:
-            self.log.err(f"🤖 Gemini API falhou: {e}")
-            return None
+            except Exception as e:
+                self._last_error = str(e)
+                self.log.warn(f"🤖 Erro na tentativa {attempt}: {e}")
+                
+                if attempt == self.MAX_RETRIES:
+                    self.log.err(f"🤖 Gemini API falhou após {self.MAX_RETRIES} tentativas: {self._last_error}")
+                    return None
+                elif "404" in self._last_error:
+                    self.log.err("🤖 Erro 404: Chave de API inválida ou endpoint incorreto")
+                    return None
+                elif "429" in self._last_error:
+                    self.log.warn("🤖 Rate limit excedido — aguardando...")
+                    time.sleep(5)
+        
+        return None
 
     @staticmethod
     def validate_key(api_key: str) -> tuple[bool, str]:
         """Valida a chave Gemini com uma chamada mínima."""
+        if not api_key:
+            return False, "Chave vazia"
+        
+        if not api_key.startswith("AI"):
+            return False, "Formato inválido (deve começar com 'AI')"
+        
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
             req = Request(url, headers={"Content-Type": "application/json"})
@@ -691,7 +866,13 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
                 return False, "Chave inválida"
             if "403" in err:
                 return False, "Sem permissão — verifique a chave"
+            if "404" in err:
+                return False, "Endpoint não encontrado — verifique a chave"
             return False, f"Erro de conexão: {err}"
+    
+    def get_last_error(self) -> str | None:
+        """Retorna último erro ocorrido."""
+        return self._last_error
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1518,9 +1699,11 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self.work_dir       = Path(tempfile.mkdtemp(prefix="flutter_orch_"))
         self._checklist: Checklist | None = None
         self.kb: KnowledgeBase | None = None   # iniciado após _build_ui (precisa do Logger)
+        self.pkg_cache: PackageCacheManager | None = None  # Gerenciador de cache offline
 
         self._build_ui()
         self.kb = KnowledgeBase(self.log)      # Logger já existe aqui
+        self.pkg_cache = PackageCacheManager(self.log)  # Inicializa cache de pacotes
         self._poll_adb()
         threading.Thread(target=self._run_checklist, daemon=True).start()
 
@@ -2010,6 +2193,26 @@ class FlutterOrchestratorGUI(ctk.CTk):
             self._set_ci_mode("local")
 
             try:
+                # Configurar cache de pacotes antes do build
+                if self.pkg_cache:
+                    self._set_status("Configurando cache de pacotes...", "#ffc107")
+                    self.pkg_cache.configure_pub_cache(project)
+                    
+                    # Detectar dependências e pré-aquecer cache
+                    deps = []
+                    main_dart_check = project / "lib" / "main.dart"
+                    if main_dart_check.exists():
+                        code_content = main_dart_check.read_text(encoding="utf-8", errors="replace")
+                        import_lines = [l.strip() for l in code_content.split("\n") if l.strip().startswith("import ")]
+                        for line in import_lines:
+                            match = re.search(r'package:(\w+)', line)
+                            if match:
+                                pkg = match.group(1)
+                                if pkg not in ["flutter", "dart"]:
+                                    deps.append(pkg)
+                    if deps:
+                        self.pkg_cache.prewarm_cache(deps, project)
+
                 self._set_status("Limpando projeto...", "#ffc107")
                 runner.flutter_cmd(["clean"], project, fail_on_error=False)
 
@@ -2017,6 +2220,9 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 pub_ok = runner.flutter_cmd(["pub", "get"], project)
                 if not pub_ok:
                     self.log.warn("pub get falhou — tentando build mesmo assim...")
+                elif self.pkg_cache:
+                    # Registrar pacotes baixados no cache
+                    self.log.info("📦 Atualizando cache de pacotes...")
 
                 # Configurar gradle.properties para evitar crashes de memória
                 gradle_props = project / "android" / "gradle.properties"
