@@ -735,22 +735,68 @@ class CodeFixer:
         - Chaves desbalanceadas
         - 'if' sem condição em builders
         - Chamadas de métodos nativos inválidos (Build.VERSION, MediaStore)
+        - Remove blocos YAML/XML que vazaram para o código Dart
         """
         if not code:
             return code
         
-        # 1. Proteger blocos YAML/XML que possam estar misturados
+        # 0. REMOVER BLOCOS YAML/XML QUE VAZARAM PARA O CÓDIGO DART
+        # Isso é crítico - remove qualquer coisa que pareça pubspec.yaml ou AndroidManifest no meio do Dart
+        yaml_start_patterns = [
+            r'^name:\s*\w+',
+            r'^description:',
+            r'^version:',
+            r'^environment:',
+            r'^dependencies:',
+            r'^dev_dependencies:',
+            r'^flutter:',
+            r'^\s+sdk:',
+            r'^\s+uses-material-design:'
+        ]
+        
+        for pattern in yaml_start_patterns:
+            # Remove linhas que começam com padrões YAML até encontrar um import Dart
+            match = re.search(rf"{pattern}[^\n]*", code, re.MULTILINE)
+            if match:
+                # Encontra onde termina o bloco YAML (próximo import ou fim do bloco)
+                start_pos = match.start()
+                # Procura pelo próximo padrão Dart válido
+                next_dart = re.search(r'^import\s+|^class\s+|^void\s+|^Widget\s+', code[start_pos:], re.MULTILINE)
+                if next_dart:
+                    end_pos = start_pos + next_dart.start()
+                    # Verifica se é realmente YAML olhando as próximas linhas
+                    block = code[start_pos:end_pos]
+                    if ':' in block and 'import' not in block:
+                        code = code[:start_pos] + code[end_pos:]
+        
+        # Remove tags XML soltas no código Dart
+        xml_pattern = r'<uses-permission[^>]*>\s*'
+        code = re.sub(xml_pattern, '', code)
+        
+        # Remove blocos inteiros que parecem pubspec.yaml completo
+        yaml_block_pattern = r'(name:\s*\w+[\s\S]*?(?=^import\s+|^class\s+|\Z))'
+        matches = list(re.finditer(yaml_block_pattern, code, re.MULTILINE))
+        for m in reversed(matches):  # Reverso para não afetar índices
+            block = m.group(1)
+            lines = block.split('\n')
+            # Só remove se tiver múltiplas linhas típicas de YAML
+            yaml_indicators = sum(1 for l in lines if ':' in l and not l.strip().startswith('//'))
+            if yaml_indicators > 3:
+                code = code[:m.start()] + code[m.end():]
+        
+        # 1. Proteger blocos YAML/XML legítimos que possam estar no início/fim
         yaml_blocks = []
         xml_blocks = []
         
-        # Extrair blocos YAML (pubspec.yaml)
-        yaml_pattern = r'(name:\s*\w+[\s\S]*?(?=^import|\Z))'
+        # Extrair blocos YAML residuais
+        yaml_pattern = r'(name:\s*\w+[\s\S]*?(?=^import|class|\Z))'
         for m in re.finditer(yaml_pattern, code, re.MULTILINE):
-            placeholder = f"__YAML_BLOCK_{len(yaml_blocks)}__"
-            yaml_blocks.append(m.group(1))
-            code = code.replace(m.group(1), placeholder, 1)
+            if len(m.group(1).split('\n')) > 2:  # Só blocos com múltiplas linhas
+                placeholder = f"__YAML_BLOCK_{len(yaml_blocks)}__"
+                yaml_blocks.append(m.group(1))
+                code = code.replace(m.group(1), placeholder, 1)
         
-        # Extrair blocos XML (AndroidManifest)
+        # Extrair blocos XML residuais
         xml_pattern = r'(<uses-permission[\s\S]*?/?>)'
         for m in re.finditer(xml_pattern, code):
             placeholder = f"__XML_BLOCK_{len(xml_blocks)}__"
@@ -814,7 +860,7 @@ class CodeFixer:
                 if pos != -1:
                     code = code[:pos] + code[pos+1:]
         
-        # 7. Restaurar blocos YAML/XML
+        # 7. Restaurar blocos YAML/XML (agora limpos)
         for i, block in enumerate(yaml_blocks):
             code = code.replace(f"__YAML_BLOCK_{i}__", block)
         for i, block in enumerate(xml_blocks):
