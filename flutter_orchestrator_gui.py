@@ -1121,12 +1121,12 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
 # ─────────────────────────────────────────────────────────────
 class ProjectSourceManager:
 
-    # Mapa de package → versão estável conhecida
+    # Mapa de package → versão estável conhecida (VALIDADAS NO PUB.DEV)
     KNOWN_PACKAGES = {
         "path_provider":        "^2.1.4",
         "shared_preferences":   "^2.3.2",
         "just_audio":           "^0.9.40",
-        "media_store":          "^0.9.0",  # Adicionado para resolver erro de pacote desconhecido
+        # media_store REMOVIDO: pacote não existe no pub.dev (causava erro "doesn't match any versions")
         "http":                 "^1.2.2",
         "provider":             "^6.1.2",
         "get":                  "^4.6.6",
