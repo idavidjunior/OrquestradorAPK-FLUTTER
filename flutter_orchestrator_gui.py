@@ -1305,6 +1305,9 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self.title("🚀 Flutter Build Orchestrator")
         self.geometry("1200x960")
         self.minsize(1000, 750)
+        
+        # Configura handler de fechamento para limpeza adequada
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
         self.build_type     = tk.StringVar(value="release")
         self.auto_install   = tk.BooleanVar(value=True)
@@ -1328,6 +1331,16 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self.kb = KnowledgeBase(self.log)      # Logger já existe aqui
         self._poll_adb()
         threading.Thread(target=self._run_checklist, daemon=True).start()
+
+    def _on_closing(self):
+        """Handler de fechamento da janela - limpa diretório temporário."""
+        try:
+            if hasattr(self, 'work_dir') and self.work_dir.exists():
+                self.log.info(f"Limpando diretório temporário: {self.work_dir}")
+                shutil.rmtree(self.work_dir, ignore_errors=True)
+        except Exception as e:
+            print(f"Erro na limpeza: {e}")
+        self.destroy()
 
     # ── UI ──────────────────────────────────────
     def _build_ui(self):

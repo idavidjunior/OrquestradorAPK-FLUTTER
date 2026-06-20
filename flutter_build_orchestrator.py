@@ -344,7 +344,9 @@ class FlutterBuildOrchestrator:
         print("\n" + "=" * 60)
         print(f"{Color.BOLD}RESUMO DO BUILD{Color.RESET}")
         print("=" * 60)
-        print(f"Status: {'{Color.GREEN}SUCESSO{Color.RESET}' if success else '{Color.RED}FALHA{Color.RESET}'}")
+        status_color = Color.GREEN if success else Color.RED
+        status_text = "SUCESSO" if success else "FALHA"
+        print(f"Status: {status_color}{status_text}{Color.RESET}")
         print(f"Duração: {report['build_info']['duration_seconds']:.2f} segundos")
         if apk_path and apk_path.exists():
             print(f"APK: {apk_path.name}")
