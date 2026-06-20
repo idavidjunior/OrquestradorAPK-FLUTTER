@@ -145,7 +145,7 @@
         }
       ],
       "pubspec_replace": {
-        "media_store": "on_audio_query: ^3.0.0"
+        "media_store": "on_audio_query: ^2.9.0"
       },
       "fix_hint": "media_store não existe. Use on_audio_query para acessar a MediaStore do Android.",
       "explanation": "O pacote 'media_store' nunca existiu no pub.dev. O equivalente correto é 'on_audio_query' que fornece acesso à MediaStore do Android com API Dart nativa.",
@@ -214,7 +214,7 @@
     "uuid": "^4.5.1",
     "crypto": "^3.0.5",
     "collection": "^1.19.0",
-    "on_audio_query": "^3.0.0",
+    "on_audio_query": "^2.9.0",
     "device_info_plus": "^10.1.0",
     "media_store_plus": "^1.0.3"
   },

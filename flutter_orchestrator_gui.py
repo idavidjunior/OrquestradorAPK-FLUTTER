@@ -645,7 +645,7 @@ class ProjectSourceManager:
 
     # Mapa de package → versão estável conhecida
     KNOWN_PACKAGES = {
-        "on_audio_query":       "^3.0.0",
+        "on_audio_query":       "^2.9.0",
         "device_info_plus":     "^10.1.0",
         "media_store_plus":     "^1.0.3",
         "path_provider":        "^2.1.4",
