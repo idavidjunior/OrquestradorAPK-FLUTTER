@@ -847,9 +847,9 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
         if not api_key:
             return False, "Chave vazia"
         
-        # Chaves do Google Gemini sempre começam com 'AIza'
-        if not api_key.startswith("AIza"):
-            return False, "Formato inválido (deve começar com 'AIza')"
+        # Chaves do Google Gemini/AI Studio podem começar com 'AIza' (legado) ou 'AQ.' (novo formato AI Studio)
+        if not (api_key.startswith("AIza") or api_key.startswith("AQ.")):
+            return False, "Formato inválido (deve começar com 'AIza' ou 'AQ.')"
         
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
@@ -1788,7 +1788,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
         ctk.CTkLabel(r2, text="  🤖 Gemini:", text_color="gray",
                      font=ctk.CTkFont(size=11)).pack(side="left", padx=(10, 0))
         gem_entry = ctk.CTkEntry(r2, textvariable=self.gemini_key,
-                                  placeholder_text="AIza...", show="*", width=200, height=26)
+                                  placeholder_text="AIza... ou AQ....", show="*", width=200, height=26)
         gem_entry.pack(side="left", padx=4)
         self.lbl_gemini_status = ctk.CTkLabel(r2, text="⬜", text_color="gray",
                                                font=ctk.CTkFont(size=11))
