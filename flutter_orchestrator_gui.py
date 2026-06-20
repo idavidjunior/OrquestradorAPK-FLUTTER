@@ -49,98 +49,6 @@ ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
 # ─────────────────────────────────────────────────────────────
-#  ContextAnalyzer — Detecta tipo do app e aplica configurações
-# ─────────────────────────────────────────────────────────────
-class ContextAnalyzer:
-    """
-    Analisa o código fonte para identificar o tipo de aplicativo
-    e aplicar configurações automáticas (permissões, dependências, etc.)
-    """
-    
-    # Mapeamento de padrões para tipos de aplicativos
-    APP_PATTERNS = {
-        'MEDIA_PLAYER': {
-            'keywords': ['AudioPlayer', 'just_audio', 'audioplayers', 'MusicPlayer', 'Song', 'Playlist', 'Playback', '_PlayerScreen'],
-            'permissions': [
-                'android.permission.READ_MEDIA_AUDIO',
-                'android.permission.READ_EXTERNAL_STORAGE',
-                'android.permission.WRITE_EXTERNAL_STORAGE'
-            ],
-            'dependencies': ['audio_session: ^0.2.3'],
-            'description': 'Reprodutor de Música/Mídia'
-        },
-        'CAMERA_APP': {
-            'keywords': ['CameraController', 'camera', 'ImagePicker', 'takePicture', 'startVideoRecording'],
-            'permissions': [
-                'android.permission.CAMERA',
-                'android.permission.RECORD_AUDIO'
-            ],
-            'dependencies': ['camera: ^0.11.0', 'image_picker: ^1.0.0'],
-            'description': 'Aplicativo de Câmera'
-        },
-        'MAPS_APP': {
-            'keywords': ['GoogleMap', 'MapController', 'google_maps_flutter', 'Marker', 'Polyline', 'Location'],
-            'permissions': [
-                'android.permission.ACCESS_FINE_LOCATION',
-                'android.permission.ACCESS_COARSE_LOCATION'
-            ],
-            'dependencies': ['google_maps_flutter: ^2.5.0', 'location: ^5.0.0'],
-            'description': 'Aplicativo com Mapas'
-        },
-        'CALCULATOR': {
-            'keywords': ['Calculator', 'calculate', 'math', 'expression', 'eval'],
-            'permissions': [],
-            'dependencies': ['math_expressions: ^2.4.0'],
-            'description': 'Calculadora'
-        },
-        'FIREBASE_APP': {
-            'keywords': ['Firebase', 'firebase_core', 'Firestore', 'Auth', 'Database', 'Storage'],
-            'permissions': ['android.permission.INTERNET'],
-            'dependencies': ['firebase_core: ^2.24.0', 'cloud_firestore: ^4.14.0'],
-            'description': 'App com Firebase'
-        },
-        'CHAT_APP': {
-            'keywords': ['Chat', 'Message', 'WebSocket', 'Socket', 'Realtime', 'Conversation'],
-            'permissions': ['android.permission.INTERNET'],
-            'dependencies': ['websocket: ^0.0.3'],
-            'description': 'Aplicativo de Chat'
-        }
-    }
-    
-    def __init__(self, code: str):
-        self.code = code
-        self.detected_types = []
-        self.required_permissions = set()
-        self.suggested_dependencies = set()
-        
-    def analyze(self) -> dict:
-        """Analisa o código e retorna informações sobre o contexto"""
-        for app_type, config in self.APP_PATTERNS.items():
-            score = 0
-            for keyword in config['keywords']:
-                if keyword.lower() in self.code.lower():
-                    score += 1
-            
-            # Se encontrou pelo menos 2 palavras-chave, considera relevante
-            if score >= 2:
-                self.detected_types.append(app_type)
-                self.required_permissions.update(config['permissions'])
-                self.suggested_dependencies.update(config['dependencies'])
-        
-        return {
-            'detected_types': self.detected_types,
-            'permissions': list(self.required_permissions),
-            'dependencies': list(self.suggested_dependencies),
-            'descriptions': [self.APP_PATTERNS[t]['description'] for t in self.detected_types]
-        }
-    
-    @staticmethod
-    def from_code(code: str) -> 'ContextAnalyzer':
-        """Factory method para criar analyzer a partir do código"""
-        return ContextAnalyzer(code)
-
-
-# ─────────────────────────────────────────────────────────────
 #  Logger — fila thread-safe, drenada por timer independente
 # ─────────────────────────────────────────────────────────────
 class Logger:
@@ -424,6 +332,17 @@ class KnowledgeBase:
                         code    = imp + "\n" + code
                         changed = True
 
+            elif fix_type == "import_replace":
+                for op in fix.get("operations", []):
+                    if op["find"] in code:
+                        code    = code.replace(op["find"], op["replace"])
+                        changed = True
+                # Trata substituição no pubspec (sinaliza via log)
+                pubspec_replace = fix.get("pubspec_replace", {})
+                if pubspec_replace and changed:
+                    for old_pkg, new_entry in pubspec_replace.items():
+                        self.log.warn(f"🧠 Lembre de substituir '{old_pkg}' por '{new_entry}' no pubspec.yaml")
+
             elif fix_type == "pubspec_inject":
                 # Tratado separadamente pelo ProjectSourceManager
                 changed = True
@@ -438,16 +357,13 @@ class KnowledgeBase:
                 # Adiciona default ao switch de LoopMode se não existir
                 def _add_default(m):
                     block = m.group(0)
-                    if "default:" not in block and "default :" not in block:
-                        block = block.rstrip().rstrip("}").rstrip()
-                        block += """
-  default:
-    break;
-}"""
+                    if "default:" not in block:
+                        block = block.rstrip("}").rstrip() + \
+                                "\n        default:\n          break;\n      }"
                         return block
                     return block
                 new_code = re.sub(
-                    r'switch\s*\([^)]+\)\s*\{(?:[^{}]|\{[^{}]*\})*\}',
+                    r'switch\s*\(\w+\)\s*\{[^}]+LoopMode[^}]+\}',
                     _add_default, code, flags=re.DOTALL
                 )
                 if new_code != code:
@@ -526,123 +442,6 @@ class KnowledgeBase:
         except Exception as e:
             self.log.warn(f"🧠 Não foi possível aprender deste fix: {e}")
 
-    # ── Aprender com protocolos de sucesso ────────
-    def learn_success_protocol(self, source_type: str, build_type: str,
-                               fixes_applied: list[str], elapsed_seconds: float,
-                               code_hash: str, code_content: str = ""):
-        """
-        Quando um build tem sucesso, registra o protocolo bem-sucedido
-        para aprendizado futuro e replicação.
-        """
-        try:
-            protocol = {
-                "id": datetime.now().strftime("%Y%m%d%H%M%S"),
-                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "source_type": source_type,
-                "build_type": build_type,
-                "fixes_applied": fixes_applied,
-                "elapsed_seconds": round(elapsed_seconds, 2),
-                "code_hash": code_hash,
-                "code_snapshot": code_content[:5000] if code_content else "",  # Primeiros 5k chars para comparação
-                "status": "success"
-            }
-            
-            self._db.setdefault("success_protocols", []).append(protocol)
-            
-            # Mantém apenas os últimos 100 protocolos para não inflar o JSON
-            protocols = self._db.get("success_protocols", [])
-            if len(protocols) > 100:
-                self._db["success_protocols"] = protocols[-100:]
-            
-            self.log.ok(f"🧠 Protocolo de sucesso registrado: {fixes_applied if fixes_applied else 'build limpo'}")
-            self.log.info(f"   Tempo: {elapsed_seconds:.1f}s | Total de protocolos: {len(self._db['success_protocols'])}")
-            
-            self._save()
-            
-        except Exception as e:
-            self.log.warn(f"🧠 Não foi possível registrar protocolo de sucesso: {e}")
-
-    # ── Buscar protocolos similares ────────
-    def find_similar_protocols(self, code_content: str, top_k: int = 3) -> list[dict]:
-        """
-        Encontra protocolos de sucesso com código similar.
-        Útil para detectar se é uma atualização de um app já construído.
-        Retorna lista de protocolos ordenados por similaridade.
-        """
-        if not code_content or "success_protocols" not in self._db:
-            return []
-        
-        import hashlib
-        
-        # Hash exato
-        current_hash = hashlib.sha256(code_content.encode()).hexdigest()[:16]
-        
-        scored_protocols = []
-        for protocol in self._db.get("success_protocols", []):
-            score = 0
-            reasons = []
-            
-            # Hash idêntico (mesmo código)
-            if protocol.get("code_hash") == current_hash:
-                score += 100
-                reasons.append("hash_idêntico")
-            
-            # Snapshot parcial similar (comparação simples por substring)
-            snapshot = protocol.get("code_snapshot", "")
-            if snapshot and len(snapshot) > 100:
-                # Verifica se há sobreposição significativa
-                common_lines = set(code_content.split("\n")) & set(snapshot.split("\n"))
-                if len(common_lines) > 50:
-                    score += 50
-                    reasons.append(f"{len(common_lines)}_linhas_comuns")
-            
-            # Mesmas dependências detectadas
-            current_deps = self._detect_dependencies(code_content)
-            past_deps = self._detect_dependencies(snapshot) if snapshot else set()
-            common_deps = current_deps & past_deps
-            if common_deps:
-                score += len(common_deps) * 10
-                reasons.append(f"deps_comuns:{','.join(common_deps)}")
-            
-            if score > 0:
-                protocol_copy = protocol.copy()
-                protocol_copy["similarity_score"] = score
-                protocol_copy["similarity_reasons"] = reasons
-                scored_protocols.append(protocol_copy)
-        
-        # Ordena por score decrescente
-        scored_protocols.sort(key=lambda x: x["similarity_score"], reverse=True)
-        return scored_protocols[:top_k]
-
-    def _detect_dependencies(self, code: str) -> set[str]:
-        """Extrai imports de pacotes do código Dart."""
-        deps = set()
-        import_pattern = r"import\s+['\"]package:(\w+)/"
-        for match in re.finditer(import_pattern, code):
-            deps.add(match.group(1))
-        return deps
-
-    def suggest_fixes_from_history(self, code_content: str) -> list[str]:
-        """
-        Sugere correções baseadas em protocolos de sucesso similares.
-        Retorna lista de fixes que funcionaram em códigos parecidos.
-        """
-        similar = self.find_similar_protocols(code_content)
-        if not similar:
-            return []
-        
-        all_fixes = []
-        for proto in similar:
-            fixes = proto.get("fixes_applied", [])
-            for fix in fixes:
-                if fix not in all_fixes:
-                    all_fixes.append(fix)
-        
-        if all_fixes:
-            self.log.info(f"🧠 Histórico sugere {len(all_fixes)} correção(ões) baseada(s) em {len(similar)} protocolo(s) similar(es)")
-        
-        return all_fixes
-
     # ── Pacotes conhecidos ───────────────────────
     def get_package_version(self, pkg: str) -> str | None:
         return self._db.get("package_versions", {}).get(pkg)
@@ -659,334 +458,64 @@ class KnowledgeBase:
         meta   = self._db.get("_meta", {})
         fixes  = self._db.get("fixes", [])
         hist   = self._db.get("error_history", [])
-        success_protocols = self._db.get("success_protocols", [])
         manual = sum(1 for f in fixes if f.get("source") == "manual")
         learned= sum(1 for f in fixes if f.get("source") == "gemini")
         return {
-            "total_fixes":       len(fixes),
-            "manual_fixes":      manual,
-            "learned_fixes":     learned,
-            "total_applied":     meta.get("total_fixes_applied", 0),
-            "history_count":     len(hist),
-            "success_protocols": len(success_protocols),
+            "total_fixes":    len(fixes),
+            "manual_fixes":   manual,
+            "learned_fixes":  learned,
+            "total_applied":  meta.get("total_fixes_applied", 0),
+            "history_count":  len(hist),
         }
-
-
-# ─────────────────────────────────────────────────────────────
-#  Package Cache Manager — Cache Offline de Dependências
-# ─────────────────────────────────────────────────────────────
-class PackageCacheManager:
-    """
-    Gerencia cache offline de pacotes Flutter/Dart para acelerar builds
-    e permitir operação sem internet após primeiro download.
-    
-    Estrutura:
-    - ~/.flutter_orchestrator/cache/pub/
-    - ~/.flutter_orchestrator/cache/plugins/
-    """
-    
-    def __init__(self, log: Logger):
-        self.log = log
-        self.cache_dir = Path.home() / ".flutter_orchestrator" / "cache"
-        self.pub_cache = self.cache_dir / "pub"
-        self.plugins_cache = self.cache_dir / "plugins"
-        self.manifest_file = self.cache_dir / "cache_manifest.json"
-        self._init_cache()
-    
-    def _init_cache(self):
-        """Inicializa diretórios de cache."""
-        self.pub_cache.mkdir(parents=True, exist_ok=True)
-        self.plugins_cache.mkdir(parents=True, exist_ok=True)
-        if not self.manifest_file.exists():
-            self.manifest_file.write_text(json.dumps({
-                "packages": {},
-                "last_updated": None,
-                "total_size_mb": 0
-            }, indent=2), encoding="utf-8")
-    
-    def _load_manifest(self) -> dict:
-        """Carrega manifesto do cache."""
-        try:
-            return json.loads(self.manifest_file.read_text(encoding="utf-8"))
-        except:
-            return {"packages": {}, "last_updated": None, "total_size_mb": 0}
-    
-    def _save_manifest(self, manifest: dict):
-        """Salva manifesto do cache."""
-        self.manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    
-    def get_cached_packages(self) -> list[str]:
-        """Retorna lista de pacotes em cache."""
-        manifest = self._load_manifest()
-        return list(manifest.get("packages", {}).keys())
-    
-    def is_package_cached(self, package_name: str) -> bool:
-        """Verifica se pacote está em cache."""
-        manifest = self._load_manifest()
-        return package_name in manifest.get("packages", {})
-    
-    def register_package(self, package_name: str, version: str, path: str):
-        """Registra pacote no cache."""
-        manifest = self._load_manifest()
-        manifest["packages"][package_name] = {
-            "version": version,
-            "path": path,
-            "cached_at": datetime.now().isoformat()
-        }
-        self._update_size(manifest)
-        self._save_manifest(manifest)
-    
-    def _update_size(self, manifest: dict):
-        """Atualiza tamanho total do cache."""
-        total = 0
-        for pkg_info in manifest.get("packages", {}).values():
-            try:
-                path = Path(pkg_info["path"])
-                if path.exists():
-                    total += sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-            except:
-                pass
-        manifest["total_size_mb"] = round(total / (1024 * 1024), 2)
-        manifest["last_updated"] = datetime.now().isoformat()
-    
-    def configure_pub_cache(self, project_dir: Path):
-        """
-        Configura projeto para usar cache local do pub.
-        Cria .dart_tool/pub_cache config se necessário.
-        """
-        dart_tool = project_dir / ".dart_tool"
-        dart_tool.mkdir(exist_ok=True)
-        
-        # Configura variável de ambiente para cache global
-        os.environ["PUB_CACHE"] = str(self.pub_cache)
-        
-        self.log.info(f"📦 Cache pub configurado: {self.pub_cache}")
-        cached_count = len(self.get_cached_packages())
-        if cached_count > 0:
-            self.log.ok(f"  {cached_count} pacotes disponíveis offline")
-        else:
-            self.log.info("  Cache vazio — pacotes serão baixados e cacheados")
-    
-    def prewarm_cache(self, dependencies: list[str], project_dir: Path):
-        """
-        Pré-aquece cache com dependências detectadas.
-        Se já estiverem em cache, usa versão local.
-        """
-        self.log.info("🔥 Verificando cache de dependências...")
-        missing = []
-        for dep in dependencies:
-            pkg_name = dep.split(":")[0].strip()
-            if self.is_package_cached(pkg_name):
-                self.log.ok(f"  ✅ {pkg_name} em cache")
-            else:
-                missing.append(pkg_name)
-                self.log.info(f"  ⏳ {pkg_name} será baixado")
-        
-        if missing:
-            self.log.info(f"  {len(missing)} pacotes novos serão cacheados após download")
-        else:
-            self.log.ok("  Todas as dependências em cache! Build offline possível.")
-    
-    def cleanup_old_cache(self, max_age_days: int = 30):
-        """Limpa pacotes antigos do cache."""
-        manifest = self._load_manifest()
-        now = datetime.now()
-        removed = 0
-        
-        for pkg_name in list(manifest.get("packages", {}).keys()):
-            try:
-                cached_at = datetime.fromisoformat(manifest["packages"][pkg_name]["cached_at"])
-                age = (now - cached_at).days
-                if age > max_age_days:
-                    del manifest["packages"][pkg_name]
-                    removed += 1
-                    self.log.info(f"  🗑️ Removido {pkg_name} ({age} dias)")
-            except:
-                pass
-        
-        if removed > 0:
-            self._update_size(manifest)
-            self._save_manifest(manifest)
-            self.log.ok(f"  Cache limpo: {removed} pacotes removidos")
 
 
 # ─────────────────────────────────────────────────────────────
 #  Gemini Code Fixer — corrige código Dart com IA
 # ─────────────────────────────────────────────────────────────
-class CodeFixer:
-    """
-    Corretor automático de sintaxe Dart para erros comuns.
-    Funciona offline e é chamado antes do Gemini para correções rápidas.
-    """
-    
-    @staticmethod
-    def _fix_dart_syntax_errors(code: str) -> str:
-        """
-        Corrige automaticamente erros comuns de sintaxe Dart:
-        - Parênteses desbalanceados
-        - Chaves desbalanceadas
-        - 'if' sem condição em builders
-        - Chamadas de métodos nativos inválidos (Build.VERSION, MediaStore)
-        - Remove blocos YAML/XML que vazaram para o código Dart
-        """
-        if not code:
-            return code
-        
-        # 0. REMOVER BLOCOS YAML/XML QUE VAZARAM PARA O CÓDIGO DART
-        # Isso é crítico - remove qualquer coisa que pareça pubspec.yaml ou AndroidManifest no meio do Dart
-        yaml_start_patterns = [
-            r'^name:\s*\w+',
-            r'^description:',
-            r'^version:',
-            r'^environment:',
-            r'^dependencies:',
-            r'^dev_dependencies:',
-            r'^flutter:',
-            r'^\s+sdk:',
-            r'^\s+uses-material-design:'
-        ]
-        
-        for pattern in yaml_start_patterns:
-            # Remove linhas que começam com padrões YAML até encontrar um import Dart
-            match = re.search(rf"{pattern}[^\n]*", code, re.MULTILINE)
-            if match:
-                # Encontra onde termina o bloco YAML (próximo import ou fim do bloco)
-                start_pos = match.start()
-                # Procura pelo próximo padrão Dart válido
-                next_dart = re.search(r'^import\s+|^class\s+|^void\s+|^Widget\s+', code[start_pos:], re.MULTILINE)
-                if next_dart:
-                    end_pos = start_pos + next_dart.start()
-                    # Verifica se é realmente YAML olhando as próximas linhas
-                    block = code[start_pos:end_pos]
-                    if ':' in block and 'import' not in block:
-                        code = code[:start_pos] + code[end_pos:]
-        
-        # Remove tags XML soltas no código Dart
-        xml_pattern = r'<uses-permission[^>]*>\s*'
-        code = re.sub(xml_pattern, '', code)
-        
-        # Remove blocos inteiros que parecem pubspec.yaml completo
-        yaml_block_pattern = r'(name:\s*\w+[\s\S]*?(?=^import\s+|^class\s+|\Z))'
-        matches = list(re.finditer(yaml_block_pattern, code, re.MULTILINE))
-        for m in reversed(matches):  # Reverso para não afetar índices
-            block = m.group(1)
-            lines = block.split('\n')
-            # Só remove se tiver múltiplas linhas típicas de YAML
-            yaml_indicators = sum(1 for l in lines if ':' in l and not l.strip().startswith('//'))
-            if yaml_indicators > 3:
-                code = code[:m.start()] + code[m.end():]
-        
-        # 1. Proteger blocos YAML/XML legítimos que possam estar no início/fim
-        yaml_blocks = []
-        xml_blocks = []
-        
-        # Extrair blocos YAML residuais
-        yaml_pattern = r'(name:\s*\w+[\s\S]*?(?=^import|class|\Z))'
-        for m in re.finditer(yaml_pattern, code, re.MULTILINE):
-            if len(m.group(1).split('\n')) > 2:  # Só blocos com múltiplas linhas
-                placeholder = f"__YAML_BLOCK_{len(yaml_blocks)}__"
-                yaml_blocks.append(m.group(1))
-                code = code.replace(m.group(1), placeholder, 1)
-        
-        # Extrair blocos XML residuais
-        xml_pattern = r'(<uses-permission[\s\S]*?/?>)'
-        for m in re.finditer(xml_pattern, code):
-            placeholder = f"__XML_BLOCK_{len(xml_blocks)}__"
-            xml_blocks.append(m.group(1))
-            code = code.replace(m.group(1), placeholder, 1)
-        
-        # 2. Corrigir chamadas nativas Android incorretas no Dart
-        # Substituir Build.VERSION.SDK_INT por Platform.version ou remover
-        code = re.sub(r'Build\.VERSION\.SDK_INT', 'Platform.version.length', code)
-        code = re.sub(r'if\s*\(\s*Platform\.version\.length\s*>=\s*(\d+)\s*\)', 
-                      r'// Verificação de versão Android removida para compatibilidade', code)
-        
-        # Substituir MediaStore() por null ou comentário
-        code = re.sub(r'MediaStore\(\)', 'null /* MediaStore requer configuração adicional */', code)
-        
-        # 3. Corrigir 'if' condicional dentro de builders Flutter
-        # Padrão problemático: Row(children: [ if (cond) Widget ])
-        # Às vezes falta parêntese ou vírgula
-        code = re.sub(
-            r'Row\s*\(\s*children\s*:\s*\[\s*if\s*\(([^)]+)\)\s+([A-Z]\w*)',
-            r'Row(children: [if (\1) \2',
-            code
-        )
-        
-        # 4. Balancear parênteses em chamadas aninhadas
-        # Contar parênteses abertos e fechados
-        open_parens = code.count('(')
-        close_parens = code.count(')')
-        if open_parens > close_parens:
-            # Adicionar parênteses faltantes no final
-            code += ')' * (open_parens - close_parens)
-        elif close_parens > open_parens:
-            # Remover parênteses excedentes do final
-            diff = close_parens - open_parens
-            for _ in range(diff):
-                pos = code.rfind(')')
-                if pos != -1:
-                    code = code[:pos] + code[pos+1:]
-        
-        # 5. Balancear chaves
-        open_braces = code.count('{')
-        close_braces = code.count('}')
-        if open_braces > close_braces:
-            code += '}' * (open_braces - close_braces)
-        elif close_braces > open_braces:
-            diff = close_braces - open_braces
-            for _ in range(diff):
-                pos = code.rfind('}')
-                if pos != -1:
-                    code = code[:pos] + code[pos+1:]
-        
-        # 6. Balancear colchetes
-        open_brackets = code.count('[')
-        close_brackets = code.count(']')
-        if open_brackets > close_brackets:
-            code += ']' * (open_brackets - close_brackets)
-        elif close_brackets > open_brackets:
-            diff = close_brackets - open_brackets
-            for _ in range(diff):
-                pos = code.rfind(']')
-                if pos != -1:
-                    code = code[:pos] + code[pos+1:]
-        
-        # 7. Restaurar blocos YAML/XML (agora limpos)
-        for i, block in enumerate(yaml_blocks):
-            code = code.replace(f"__YAML_BLOCK_{i}__", block)
-        for i, block in enumerate(xml_blocks):
-            code = code.replace(f"__XML_BLOCK_{i}__", block)
-        
-        return code
-
-
 class GeminiCodeFixer:
     """
     Usa a API Gemini para analisar erros do compilador Dart,
     corrigir o código e retornar o código corrigido com explicações.
-    Inclui retry automático e fallback para erros de conexão.
     """
-    API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
-    MAX_RETRIES = 3
-    RETRY_DELAY = 2  # segundos
+    # Tenta modelos em ordem até um funcionar
+    MODELS = [
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-pro",
+    ]
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    @classmethod
+    def _working_url(cls, api_key: str) -> str | None:
+        """Encontra o primeiro modelo disponível para esta chave."""
+        for model in cls.MODELS:
+            url = cls.BASE_URL.format(model=model)
+            try:
+                req = Request(
+                    f"{url}?key={api_key}",
+                    data=json.dumps({"contents": [{"parts": [{"text": "hi"}]}]}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urlopen(req, timeout=10) as r:
+                    if r.status == 200:
+                        return url
+            except Exception as e:
+                if "404" not in str(e):
+                    return url  # outro erro (quota, etc) — modelo existe
+        return None
 
     def __init__(self, api_key: str, log: Logger):
         self.api_key = api_key
         self.log = log
-        self._last_error = None
-    
+
     def fix(self, code: str, errors: list[str]) -> str | None:
         """
         Envia código + erros para o Gemini e retorna código corrigido.
-        Retorna None se falhar após retries.
+        Retorna None se falhar.
         """
         if not self.api_key:
-            self.log.warn("🤖 Chave da API Gemini não configurada")
-            return None
-        
-        if not self.api_key.startswith("AI"):
-            self.log.err("🤖 Formato de chave Gemini inválido (deve começar com 'AI')")
             return None
 
         error_text = "\n".join(errors[:60])  # máx 60 linhas de erro
@@ -1022,75 +551,54 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
             }
         }
 
-        # Retry loop para lidar com falhas temporárias
-        for attempt in range(1, self.MAX_RETRIES + 1):
-            try:
-                if attempt > 1:
-                    self.log.info(f"🤖 Tentativa {attempt}/{self.MAX_RETRIES}...")
-                    time.sleep(self.RETRY_DELAY * (attempt - 1))  # Backoff exponencial
-                
-                self.log.info("🤖 Enviando código para Gemini analisar e corrigir...")
-                url = f"{self.API_URL}?key={self.api_key}"
-                req = Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST"
-                )
-                
-                with urlopen(req, timeout=90) as r:
-                    resp = json.loads(r.read())
+        try:
+            self.log.info("🤖 Enviando código para Gemini analisar e corrigir...")
 
-                # Extrai o texto da resposta
-                fixed_code = (resp.get("candidates", [{}])[0]
-                                 .get("content", {})
-                                 .get("parts", [{}])[0]
-                                 .get("text", "")).strip()
+            # Descobre URL funcional
+            url = GeminiCodeFixer._working_url(self.api_key)
+            if not url:
+                self.log.err("🤖 Nenhum modelo Gemini disponível para esta chave")
+                return None
 
-                if not fixed_code:
-                    self.log.warn("Gemini retornou resposta vazia")
-                    if attempt < self.MAX_RETRIES:
-                        continue
-                    return None
+            self.log.info(f"🤖 Usando: {url.split('/models/')[1].split(':')[0]}")
+            full_url = f"{url}?key={self.api_key}"
+            req = Request(
+                full_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urlopen(req, timeout=60) as r:
+                resp = json.loads(r.read())
 
-                # Remove marcadores de código se Gemini os incluiu mesmo assim
-                if fixed_code.startswith("```"):
-                    lines = fixed_code.split("\n")
-                    fixed_code = "\n".join(
-                        l for l in lines
-                        if not l.strip().startswith("```")
-                    ).strip()
+            # Extrai o texto da resposta
+            fixed_code = (resp.get("candidates", [{}])[0]
+                             .get("content", {})
+                             .get("parts", [{}])[0]
+                             .get("text", "")).strip()
 
-                self.log.ok("🤖 Gemini retornou código corrigido")
-                self._last_error = None
-                return fixed_code
+            if not fixed_code:
+                self.log.err("Gemini retornou resposta vazia")
+                return None
 
-            except Exception as e:
-                self._last_error = str(e)
-                self.log.warn(f"🤖 Erro na tentativa {attempt}: {e}")
-                
-                if attempt == self.MAX_RETRIES:
-                    self.log.err(f"🤖 Gemini API falhou após {self.MAX_RETRIES} tentativas: {self._last_error}")
-                    return None
-                elif "404" in self._last_error:
-                    self.log.err("🤖 Erro 404: Chave de API inválida ou endpoint incorreto")
-                    return None
-                elif "429" in self._last_error:
-                    self.log.warn("🤖 Rate limit excedido — aguardando...")
-                    time.sleep(5)
-        
-        return None
+            # Remove marcadores de código se Gemini os incluiu mesmo assim
+            if fixed_code.startswith("```"):
+                lines = fixed_code.split("\n")
+                fixed_code = "\n".join(
+                    l for l in lines
+                    if not l.strip().startswith("```")
+                ).strip()
+
+            self.log.ok("🤖 Gemini retornou código corrigido")
+            return fixed_code
+
+        except Exception as e:
+            self.log.err(f"🤖 Gemini API falhou: {e}")
+            return None
 
     @staticmethod
     def validate_key(api_key: str) -> tuple[bool, str]:
         """Valida a chave Gemini com uma chamada mínima."""
-        if not api_key:
-            return False, "Chave vazia"
-        
-        # Chaves do Google Gemini/AI Studio podem começar com 'AIza' (legado) ou 'AQ.' (novo formato AI Studio)
-        if not (api_key.startswith("AIza") or api_key.startswith("AQ.")):
-            return False, "Formato inválido (deve começar com 'AIza' ou 'AQ.')"
-        
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
             req = Request(url, headers={"Content-Type": "application/json"})
@@ -1107,13 +615,7 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
                 return False, "Chave inválida"
             if "403" in err:
                 return False, "Sem permissão — verifique a chave"
-            if "404" in err:
-                return False, "Endpoint não encontrado — verifique a chave"
             return False, f"Erro de conexão: {err}"
-    
-    def get_last_error(self) -> str | None:
-        """Retorna último erro ocorrido."""
-        return self._last_error
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1121,12 +623,14 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
 # ─────────────────────────────────────────────────────────────
 class ProjectSourceManager:
 
-    # Mapa de package → versão estável conhecida (VALIDADAS NO PUB.DEV)
+    # Mapa de package → versão estável conhecida
     KNOWN_PACKAGES = {
+        "on_audio_query":       "^3.0.0",
+        "device_info_plus":     "^10.1.0",
+        "media_store_plus":     "^1.0.3",
         "path_provider":        "^2.1.4",
         "shared_preferences":   "^2.3.2",
         "just_audio":           "^0.9.40",
-        # media_store REMOVIDO: pacote não existe no pub.dev (causava erro "doesn't match any versions")
         "http":                 "^1.2.2",
         "provider":             "^6.1.2",
         "get":                  "^4.6.6",
@@ -1254,33 +758,6 @@ class ProjectSourceManager:
         return warnings
 
     @staticmethod
-    def _fix_dart_syntax_errors(code: str) -> str:
-        """Tenta corrigir erros comuns de sintaxe Dart automaticamente."""
-        lines = code.split('\n')
-        fixed_lines = []
-        
-        for i, line in enumerate(lines):
-            # 1. Corrigir 'if' solto dentro de listas/coleções (comum em Flutter)
-            # Padrão: "            if (cond) Widget(" vira "            if (cond) Widget(),"
-            if re.search(r'\s+if\s*\([^)]+\)\s+\w+\s*\(', line) and not line.rstrip().endswith(','):
-                # Verifica se parece estar dentro de uma lista de children
-                if any('children' in l for l in lines[max(0, i-5):i]):
-                    line = line.rstrip() + ','
-            
-            # 2. Balanceamento básico de parênteses em linhas muito longas
-            open_p = line.count('(')
-            close_p = line.count(')')
-            if open_p > close_p and open_p > 2:
-                needed = open_p - close_p
-                # Só adiciona se a linha terminar com construtor de widget
-                if re.search(r'\w+\(', line.rstrip()):
-                    line = line.rstrip() + (')' * needed)
-            
-            fixed_lines.append(line)
-        
-        return '\n'.join(fixed_lines)
-
-    @staticmethod
     def _apply_static_fixes(code: str, log: Logger) -> tuple[str, list[str]]:
         """
         Aplica correções estáticas conhecidas sem precisar da API Gemini.
@@ -1301,34 +778,9 @@ class ProjectSourceManager:
                 code = "import 'package:just_audio/just_audio.dart';\n" + code
             fixes.append("RepeatMode → LoopMode (just_audio)")
 
-        # Remove switch exhaustiveness: adiciona default se tiver switch em LoopMode
-        if "switch (" in code and "LoopMode" in code:
-            # Adiciona case default se não existir no switch de LoopMode
-            import re as _re
-            def _add_default(m):
-                block = m.group(0)
-                # Verifica se já tem default no switch
-                if "default:" not in block and "default :" not in block:
-                    # Remove a chave de fechamento final e espaços em branco
-                    block = block.rstrip().rstrip("}").rstrip()
-                    # Adiciona o case default com indentação correta (2 espaços por nível)
-                    block += """
-  default:
-    break;
-}"""
-                    fixes.append("Adicionado case default no switch de LoopMode")
-                return block
-            # Regex mais robusto para capturar switch completo
-            code = re.sub(
-                r'switch\s*\([^)]+\)\s*\{(?:[^{}]|\{[^{}]*\})*\}',
-                _add_default, code, flags=re.DOTALL
-            )
-
-        # Auto-correção de Sintaxe (Parênteses e Ifs)
-        code_before_syntax = code
-        code = CodeFixer._fix_dart_syntax_errors(code)
-        if code != code_before_syntax:
-            fixes.append("Correção automática de sintaxe Dart (parênteses/if)")
+        # Corrige switch sem case default para LoopMode (Dart 3 exhaustiveness)
+        if "LoopMode" in code and "switch" in code:
+            code = ProjectSourceManager._fix_loopmode_switch(code, fixes)
 
         if code != original:
             log.ok(f"Correções estáticas aplicadas: {', '.join(fixes)}")
@@ -1338,107 +790,51 @@ class ProjectSourceManager:
         return code, fixes
 
     @staticmethod
-    def _extract_dart_code(code: str, log: Logger) -> tuple[str, dict]:
+    def _fix_loopmode_switch(code: str, fixes: list) -> str:
         """
-        Extrai apenas o código Dart válido, removendo conteúdos de outros arquivos
-        (pubspec.yaml, AndroidManifest.xml, etc.) que foram colados junto.
-        
-        Retorna: (codigo_dart_limpo, dicionario_com_outros_arquivos)
+        Localiza blocos switch que usam LoopMode e adiciona 'default: break;'
+        se não existir. Usa contagem de chaves para capturar o bloco correto.
         """
-        others = {"pubspec_lines": [], "manifest_lines": [], "gradle_lines": []}
-        dart_lines = []
-        
-        in_yaml = False
-        in_xml = False
-        in_gradle = False
-        yaml_indent_base = None
-        
-        for line in code.split('\n'):
-            stripped = line.strip()
-            
-            # Detecta início de pubspec.yaml (chave: valor no início da linha)
-            if not in_xml and not in_gradle:
-                if re.match(r'^(name|description|version|environment|dependencies|dev_dependencies|flutter):\s*', stripped):
-                    in_yaml = True
-                    yaml_indent_base = len(line) - len(line.lstrip())
-                    others["pubspec_lines"].append(line)
-                    continue
-                # Detecta início de AndroidManifest.xml
-                elif stripped.startswith('<uses-permission') or stripped.startswith('<application') or stripped.startswith('<manifest'):
-                    in_xml = True
-                    others["manifest_lines"].append(line)
-                    continue
-                # Detecta início de build.gradle
-                elif re.match(r'^(plugins|android|compileSdkVersion|defaultConfig)\s*[\{:]?', stripped):
-                    in_gradle = True
-                    others["gradle_lines"].append(line)
-                    continue
-            
-            # Se já está em YAML
-            if in_yaml:
-                current_indent = len(line) - len(line.lstrip()) if line.strip() else 0
-                # Sai do YAML se encontrar uma linha vazia seguida de código Dart
-                if stripped == '' or (current_indent <= (yaml_indent_base or 0) and re.match(r'^(import|class|void|final|var|const|enum|@)', stripped)):
-                    if re.match(r'^(import|class|void|final|var|const|enum|@)', stripped):
-                        in_yaml = False
-                        dart_lines.append(line)
-                        continue
-                    elif stripped == '':
-                        # Linha vazia pode ser fim do YAML ou apenas espaçamento
-                        # Verifica próximas linhas antes de decidir
-                        others["pubspec_lines"].append(line)
-                        continue
-                else:
-                    others["pubspec_lines"].append(line)
-                    continue
-            
-            # Se já está em XML
-            if in_xml:
-                if stripped.startswith('</manifest>') or (stripped.startswith('import ') and 'package:' in stripped):
-                    in_xml = False
-                    if stripped.startswith('import '):
-                        dart_lines.append(line)
-                        continue
-                others["manifest_lines"].append(line)
-                continue
-            
-            # Se já está em Gradle
-            if in_gradle:
-                if stripped.startswith('}') or re.match(r'^(import|class|void|final|var|const|enum|@)', stripped):
-                    in_gradle = False
-                    if re.match(r'^(import|class|void|final|var|const|enum|@)', stripped):
-                        dart_lines.append(line)
-                        continue
-                others["gradle_lines"].append(line)
-                continue
-            
-            # Código normal (Dart)
-            dart_lines.append(line)
-        
-        # Converte listas de volta para string
-        for key in others:
-            others[key] = '\n'.join(others[key])
-        
-        dart_code = '\n'.join(dart_lines)
-        
-        # Log do que foi encontrado
-        if others["pubspec_lines"]:
-            log.warn(f"📝 Conteúdo de pubspec.yaml detectado e removido ({len(others['pubspec_lines'].split(chr(10)))} linhas)")
-        if others["manifest_lines"]:
-            log.warn(f"📝 Conteúdo de AndroidManifest.xml detectado e removido ({len(others['manifest_lines'].split(chr(10)))} linhas)")
-        if others["gradle_lines"]:
-            log.warn(f"📝 Conteúdo de build.gradle detectado e removido")
-        
-        return dart_code, others
+        lines = code.split("\n")
+        result = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            # Detecta início de switch
+            if re.search(r'\bswitch\s*\(', line):
+                # Captura o bloco completo contando chaves
+                block_lines = [line]
+                depth = line.count("{") - line.count("}")
+                j = i + 1
+                while j < len(lines) and depth > 0:
+                    block_lines.append(lines[j])
+                    depth += lines[j].count("{") - lines[j].count("}")
+                    j += 1
+
+                block_text = "\n".join(block_lines)
+
+                # Só modifica se o bloco contiver LoopMode e não tiver default
+                if "LoopMode" in block_text and "default:" not in block_text:
+                    # Insere default antes do último }
+                    last_brace = len(block_lines) - 1
+                    indent = "        "  # 8 espaços
+                    block_lines.insert(last_brace,
+                                       f"{indent}default:\n{indent}  break;")
+                    fixes.append("Adicionado case default no switch de LoopMode")
+
+                result.extend(block_lines)
+                i = j
+            else:
+                result.append(line)
+                i += 1
+
+        return "\n".join(result)
 
     @staticmethod
     def from_code(code: str, work_dir: Path, flutter_exe: str, log: Logger,
                   kb=None) -> Path:
         # Aplica correções estáticas conhecidas antes de criar o projeto
         code, _ = ProjectSourceManager._apply_static_fixes(code, log)
-        
-        # Extrai apenas o código Dart válido, separando outros arquivos
-        dart_code, other_files = ProjectSourceManager._extract_dart_code(code, log)
 
         project_dir = work_dir / "pasted_project"
         if project_dir.exists():
@@ -1486,29 +882,15 @@ class ProjectSourceManager:
             raise Exception(f"Projeto não foi criado corretamente em {project_dir}")
 
         main_dart = project_dir / "lib" / "main.dart"
-        content = dart_code if "void main(" in dart_code else (
-            "import 'package:flutter/material.dart';\n\n" + dart_code
+        content = code if "void main(" in code else (
+            "import 'package:flutter/material.dart';\n\n" + code
         )
         main_dart.write_text(content, encoding="utf-8")
         log.ok(f"Projeto criado com sucesso. main.dart substituído ({len(content)} chars)")
 
         # Detecta e injeta dependências do código no pubspec.yaml
         # kb é passado opcionalmente via from_code se disponível
-        ProjectSourceManager._detect_and_inject_deps(dart_code, project_dir, log, kb=kb)
-        
-        # Processa arquivos extras extraídos (pubspec.yaml, AndroidManifest.xml)
-        if other_files.get("pubspec_lines"):
-            log.info("📝 Mesclando dependências do pubspec.yaml extraído...")
-            # TODO: Implementar merge de dependências do pubspec extraído
-        if other_files.get("manifest_lines"):
-            log.info("📝 Permissões do AndroidManifest detectadas:")
-            for line in other_files["manifest_lines"].split('\n'):
-                if 'uses-permission' in line:
-                    log.info(f"    {line.strip()}")
-            # TODO: Injetar permissões no AndroidManifest.xml do projeto
-        if other_files.get("gradle_lines"):
-            log.info("📝 Configurações Gradle detectadas — podem exigir ajuste manual")
-        
+        ProjectSourceManager._detect_and_inject_deps(code, project_dir, log, kb=kb)
         return project_dir
 
     @staticmethod
@@ -1941,11 +1323,9 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self.work_dir       = Path(tempfile.mkdtemp(prefix="flutter_orch_"))
         self._checklist: Checklist | None = None
         self.kb: KnowledgeBase | None = None   # iniciado após _build_ui (precisa do Logger)
-        self.pkg_cache: PackageCacheManager | None = None  # Gerenciador de cache offline
 
         self._build_ui()
         self.kb = KnowledgeBase(self.log)      # Logger já existe aqui
-        self.pkg_cache = PackageCacheManager(self.log)  # Inicializa cache de pacotes
         self._poll_adb()
         threading.Thread(target=self._run_checklist, daemon=True).start()
 
@@ -2029,7 +1409,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
         ctk.CTkLabel(r2, text="  🤖 Gemini:", text_color="gray",
                      font=ctk.CTkFont(size=11)).pack(side="left", padx=(10, 0))
         gem_entry = ctk.CTkEntry(r2, textvariable=self.gemini_key,
-                                  placeholder_text="AIza... ou AQ....", show="*", width=200, height=26)
+                                  placeholder_text="AIza...", show="*", width=200, height=26)
         gem_entry.pack(side="left", padx=4)
         self.lbl_gemini_status = ctk.CTkLabel(r2, text="⬜", text_color="gray",
                                                font=ctk.CTkFont(size=11))
@@ -2383,27 +1763,6 @@ class FlutterOrchestratorGUI(ctk.CTk):
 
             # Análise prévia do código colado
             if source_type == "code":
-                # 🔍 VERIFICA SE É ATUALIZAÇÃO DE APP JÁ CONSTRUÍDO
-                similar_protocols = self.kb.find_similar_protocols(source_data) if self.kb else []
-                if similar_protocols:
-                    self.log.sep()
-                    self.log.ok(f"🔍 ATUALIZAÇÃO DETECTADA! Código similar a {len(similar_protocols)} build(s) anterior(es):")
-                    for i, proto in enumerate(similar_protocols, 1):
-                        score = proto.get("similarity_score", 0)
-                        reasons = proto.get("similarity_reasons", [])
-                        date = proto.get("date", "desconhecida")
-                        fixes = proto.get("fixes_applied", [])
-                        self.log.info(f"  [{i}] Score: {score} | Data: {date}")
-                        self.log.info(f"      Razões: {', '.join(reasons)}")
-                        if fixes:
-                            self.log.info(f"      Fixes aplicados antes: {', '.join(fixes)}")
-                    self.log.sep()
-                    
-                    # Sugere correções baseadas no histórico
-                    suggested_fixes = self.kb.suggest_fixes_from_history(source_data) if self.kb else []
-                    if suggested_fixes:
-                        self.log.info(f"🧠 Histórico sugere aplicar: {', '.join(suggested_fixes)}")
-                
                 issues = ProjectSourceManager._analyse_code_issues(source_data, self.log)
                 if issues:
                     self.log.sep()
@@ -2435,26 +1794,6 @@ class FlutterOrchestratorGUI(ctk.CTk):
             self._set_ci_mode("local")
 
             try:
-                # Configurar cache de pacotes antes do build
-                if self.pkg_cache:
-                    self._set_status("Configurando cache de pacotes...", "#ffc107")
-                    self.pkg_cache.configure_pub_cache(project)
-                    
-                    # Detectar dependências e pré-aquecer cache
-                    deps = []
-                    main_dart_check = project / "lib" / "main.dart"
-                    if main_dart_check.exists():
-                        code_content = main_dart_check.read_text(encoding="utf-8", errors="replace")
-                        import_lines = [l.strip() for l in code_content.split("\n") if l.strip().startswith("import ")]
-                        for line in import_lines:
-                            match = re.search(r'package:(\w+)', line)
-                            if match:
-                                pkg = match.group(1)
-                                if pkg not in ["flutter", "dart"]:
-                                    deps.append(pkg)
-                    if deps:
-                        self.pkg_cache.prewarm_cache(deps, project)
-
                 self._set_status("Limpando projeto...", "#ffc107")
                 runner.flutter_cmd(["clean"], project, fail_on_error=False)
 
@@ -2462,31 +1801,11 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 pub_ok = runner.flutter_cmd(["pub", "get"], project)
                 if not pub_ok:
                     self.log.warn("pub get falhou — tentando build mesmo assim...")
-                elif self.pkg_cache:
-                    # Registrar pacotes baixados no cache
-                    self.log.info("📦 Atualizando cache de pacotes...")
-
-                # Configurar gradle.properties para evitar crashes de memória
-                gradle_props = project / "android" / "gradle.properties"
-                if gradle_props.exists():
-                    content = gradle_props.read_text(encoding="utf-8")
-                    # Adicionar configurações de memória se não existirem
-                    if "org.gradle.jvmargs" not in content:
-                        content += "\n# Build Orchestrator settings\norg.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G -XX:+HeapDumpOnOutOfMemoryError\norg.gradle.daemon=false\norg.gradle.parallel=true\norg.gradle.configureondemand=true\n"
-                        gradle_props.write_text(content, encoding="utf-8")
-                        self.log.ok("gradle.properties configurado com mais memória (4GB)")
 
                 build_flag = "--" + self.build_type.get()
-                # Adicionar flags de resiliência ao build
-                build_args = ["build", "apk", build_flag, "--no-pub"]
-                
-                # Em builds release, adicionar flag para reduzir tempo e memória
-                if self.build_type.get() == "release":
-                    build_args.append("--shrink")
-                
                 self._set_status(f"Compilando APK {self.build_type.get()}...", "#ffc107")
                 build_ok, build_errors = runner.flutter_cmd_with_errors(
-                    build_args, project)
+                    ["build", "apk", build_flag], project)
 
                 if build_ok:
                     apk = self._find_apk(project)
@@ -2620,33 +1939,6 @@ class FlutterOrchestratorGUI(ctk.CTk):
             self.log.info("[5/5] Entregando APK...")
             self.last_apk = apk
             elapsed = datetime.now() - start
-            elapsed_seconds = elapsed.total_seconds()
-            
-            # Aprende com o sucesso do protocolo
-            if local_ok and self.kb:
-                # Calcula hash do código para referência futura
-                import hashlib
-                main_dart = project / "lib" / "main.dart"
-                code_hash = ""
-                code_content_full = ""
-                if main_dart.exists():
-                    code_content_full = main_dart.read_text(encoding="utf-8", errors="replace")
-                    code_hash = hashlib.sha256(code_content_full.encode()).hexdigest()[:16]
-                
-                # Registra quais correções foram aplicadas
-                fixes_used = []
-                if kb_applied if 'kb_applied' in locals() else False:
-                    fixes_used.extend([f"KB:{f}" for f in kb_applied])
-                
-                self.kb.learn_success_protocol(
-                    source_type=source_type,
-                    build_type=self.build_type.get(),
-                    fixes_applied=fixes_used,
-                    elapsed_seconds=elapsed_seconds,
-                    code_hash=code_hash,
-                    code_content=code_content_full  # Salva snapshot para comparação futura
-                )
-            
             self.log.ok(f"APK: {apk}")
             self.log.ok(f"Tempo total: {elapsed}")
             self.log.sep()

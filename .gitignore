@@ -1,4 +1,4 @@
-```python
+```
 # Python
 __pycache__/
 *.pyc
@@ -8,59 +8,46 @@ __pycache__/
 env/
 venv/
 .venv/
-.ENV
-.ENV.*
-.venv.bak/
-.venv_*/
-.egg-info/
-.eggs/
-dist/
-build/
-*.egg
-*.egg~
-.coverage
-coverage/
-htmlcov/
+pip-log.txt
+pip-delete-this-directory.txt
 .tox/
-.nox/
-.pytest_cache/
-.mypy_cache/
-.hypothesis/
-
-# Logs
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
 *.log
-
-# Environment
-.env
-.env.local
-.env.*
-*.env
-.env*
-.env.*
-
-# OS generated files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
-desktop.ini
 
-# Editor
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+ios/.symlinks
+lib/generated/
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-
-# Temporary files
 *.tmp
-*.temp
-*~
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Dependencies
+node_modules/
+target/
+.gradle/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+coverage/
 ```
-
-Wait, let me reconsider this. The only change was modifying `flutter_orchestrator_gui.py` - there are no build artifacts, dependency directories, or temporary files in the change list that would require ignoring. The change is just a single Python source file modification.
-
-(empty)
