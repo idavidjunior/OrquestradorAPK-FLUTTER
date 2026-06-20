@@ -1151,10 +1151,16 @@ class CIEngine:
             apk_path = dest / f"app_{session_id}.apk"
             with zipfile.ZipFile(buf) as z:
                 for name in z.namelist():
-                    if name.endswith(".apk"):
-                        with z.open(name) as src, open(apk_path, "wb") as dst:
-                            dst.write(src.read())
-                        break
+                    # CVE-2007-4559: valida path antes de extrair
+                    if not name.endswith(".apk"):
+                        continue
+                    if any(part in ("", "..", ".") or part.startswith("/")
+                           for part in Path(name).parts):
+                        self.log.warn(f"Path suspeito ignorado no artefato: {name}")
+                        continue
+                    with z.open(name) as src, open(apk_path, "wb") as dst:
+                        dst.write(src.read())
+                    break
 
             if apk_path.exists():
                 self.log.ok(f"APK baixado: {apk_path}")
@@ -1336,10 +1342,11 @@ class FlutterOrchestratorGUI(ctk.CTk):
         """Handler de fechamento da janela - limpa diretório temporário."""
         try:
             if hasattr(self, 'work_dir') and self.work_dir.exists():
-                self.log.info(f"Limpando diretório temporário: {self.work_dir}")
+                # Usa print() pois self.log não drena mais após destroy()
+                print(f"[shutdown] Limpando diretório temporário: {self.work_dir}")
                 shutil.rmtree(self.work_dir, ignore_errors=True)
         except Exception as e:
-            print(f"Erro na limpeza: {e}")
+            print(f"[shutdown] Erro na limpeza: {e}")
         self.destroy()
 
     # ── UI ──────────────────────────────────────
@@ -1642,7 +1649,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
             self.log.err(f"Token inválido: {err}")
 
     def _poll_adb(self):
-        """Verifica dispositivos a cada 2s — detecção automática."""
+        """Verifica dispositivos a cada 2s em background — detecção automática."""
         threading.Thread(target=self._refresh_devices, daemon=True).start()
         self.after(2000, self._poll_adb)
 
@@ -1688,11 +1695,6 @@ class FlutterOrchestratorGUI(ctk.CTk):
         self.menu_device.configure(values=["Nenhum dispositivo conectado"])
         self.device_var.set("Nenhum dispositivo conectado")
         self.lbl_adb_status.configure(text="● Sem dispositivo", text_color="gray")
-
-    def _poll_adb(self):
-        """Verifica dispositivos a cada 2s em background — detecção automática."""
-        threading.Thread(target=self._refresh_devices, daemon=True).start()
-        self.after(2000, self._poll_adb)
 
     def _selected_serial(self) -> str | None:
         label = self.device_var.get()
@@ -1800,6 +1802,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
             apk = None
             local_ok = False
             build_errors: list[str] = []
+            build_flag = "--" + self.build_type.get()  # definido aqui — sempre disponível
 
             # ── ETAPA 3: Build local ─────────────
             self.log.sep()
@@ -1815,7 +1818,6 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 if not pub_ok:
                     self.log.warn("pub get falhou — tentando build mesmo assim...")
 
-                build_flag = "--" + self.build_type.get()
                 self._set_status(f"Compilando APK {self.build_type.get()}...", "#ffc107")
                 build_ok, build_errors = runner.flutter_cmd_with_errors(
                     ["build", "apk", build_flag], project)
