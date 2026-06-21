@@ -365,6 +365,26 @@
       "explanation": "O pacote provider fornece gerenciamento de estado com ChangeNotifier e Provider",
       "times_applied": 0,
       "source": "manual"
+    },
+    {
+      "id": "pubspec_syntax_error",
+      "description": "Erro de sintaxe no pubspec.yaml",
+      "error_patterns": [
+        "Not a valid package name",
+        "Error on line",
+        "column",
+        "pubspec.yaml"
+      ],
+      "context_patterns": [
+        "pubspec.yaml",
+        "dependencies"
+      ],
+      "type": "pubspec_fix",
+      "operations": [],
+      "fix_hint": "O orquestrador irá corrigir erros de sintaxe no pubspec.yaml automaticamente",
+      "explanation": "Erros de sintaxe no pubspec.yaml como nomes de pacotes inválidos ou espaços extras são corrigidos automaticamente",
+      "times_applied": 0,
+      "source": "manual"
     }
   ],
   "package_versions": {

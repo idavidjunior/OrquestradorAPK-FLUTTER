@@ -382,6 +382,11 @@ class KnowledgeBase:
                 if project_dir:
                     changed = self._fix_android_gradle_namespace(project_dir, errors, self.log)
 
+            elif fix_type == "pubspec_fix":
+                # Corrige erros de sintaxe no pubspec.yaml
+                if project_dir:
+                    changed = self._fix_pubspec_syntax_errors(errors, project_dir, self.log)
+
             if changed and fix_type != "info_only":
                 applied.append(desc)
                 fix["times_applied"] = fix.get("times_applied", 0) + 1
@@ -2191,6 +2196,26 @@ class FlutterOrchestratorGUI(ctk.CTk):
                     else:
                         self.log.warn("🔍 Não foi possível resolver automaticamente — continuando...")
 
+            # ── ETAPA 2d: Verificação de sintaxe do pubspec.yaml ──
+            if source_type == "code":
+                self.log.sep()
+                self.log.info("[2d] 🔍 Verificando sintaxe do pubspec.yaml...")
+                self._set_status("🔍 Verificando sintaxe do pubspec.yaml...", "#ff9800")
+                
+                syntax_errors = self._check_pubspec_syntax(project, self.log)
+                if syntax_errors:
+                    self.log.warn(f"🔍 {len(syntax_errors)} erro(s) de sintaxe detectado(s):")
+                    for error in syntax_errors:
+                        self.log.warn(f"  - {error}")
+                    self.log.info("🔍 Tentando corrigir erros de sintaxe automaticamente...")
+                    
+                    # Tenta corrigir erros de sintaxe
+                    fixed = self._fix_pubspec_syntax_errors(syntax_errors, project, self.log)
+                    if fixed:
+                        self.log.ok("🔍 Erros de sintaxe corrigidos")
+                    else:
+                        self.log.warn("🔍 Não foi possível corrigir automaticamente — continuando...")
+
             # ── ETAPA 3: Build local ─────────────
             self.log.sep()
             self.log.info("[3/5] Build local...")
@@ -2717,6 +2742,101 @@ class FlutterOrchestratorGUI(ctk.CTk):
         
         except Exception as e:
             log.warn(f"Erro ao resolver conflitos de dependências: {e}")
+        
+        return False
+
+    @staticmethod
+    def _check_pubspec_syntax(project: Path, log: Logger) -> list[str]:
+        """
+        Verifica erros de sintaxe no pubspec.yaml.
+        Detecta nomes de pacotes inválidos, espaços extras, etc.
+        """
+        errors = []
+        
+        try:
+            pubspec_path = project / "pubspec.yaml"
+            if not pubspec_path.exists():
+                return errors
+            
+            pubspec_content = pubspec_path.read_text(encoding="utf-8")
+            lines = pubspec_content.split("\n")
+            
+            for i, line in enumerate(lines, 1):
+                # Detecta espaços extras em nomes de pacotes
+                if ":" in line and not line.strip().startswith("#"):
+                    # Verifica se há espaços extras antes dos dois pontos
+                    package_part = line.split(":")[0].strip()
+                    if "  " in package_part:
+                        errors.append(f"Linha {i}: Espaços extras no nome do pacote: '{package_part}'")
+                    
+                    # Detecta nomes de pacotes com caracteres inválidos
+                    if package_part and not package_part.replace("_", "").replace("-", "").isalnum():
+                        errors.append(f"Linha {i}: Nome de pacote inválido: '{package_part}'")
+                
+                # Detecta linhas com espaços extras no início (indentação incorreta)
+                if line.startswith("  ") and not line.startswith("    "):
+                    # Verifica se não está dentro de um bloco
+                    if "dependencies:" not in lines[max(0, i-2):i]:
+                        errors.append(f"Linha {i}: Indentação incorreta: '{line[:20]}...'")
+            
+            # Verifica se há linhas com nomes de pacotes corrompidos (como "just_au  on_audio_query")
+            for i, line in enumerate(lines, 1):
+                if re.search(r'\w+\s{2,}\w+:', line):
+                    errors.append(f"Linha {i}: Nome de pacote corrompido com espaços extras: '{line.strip()}'")
+        
+        except Exception as e:
+            log.warn(f"Erro ao verificar sintaxe do pubspec.yaml: {e}")
+        
+        return errors
+
+    @staticmethod
+    def _fix_pubspec_syntax_errors(errors: list[str], project: Path, log: Logger) -> bool:
+        """
+        Tenta corrigir erros de sintaxe no pubspec.yaml automaticamente.
+        """
+        try:
+            pubspec_path = project / "pubspec.yaml"
+            if not pubspec_path.exists():
+                return False
+            
+            pubspec_content = pubspec_path.read_text(encoding="utf-8")
+            modified = False
+            
+            # Corrige nomes de pacotes com espaços extras (ex: "just_au  on_audio_query" -> "on_audio_query")
+            # O padrão detecta algo como "palavra1  palavra2:" e mantém apenas a segunda parte
+            def fix_corrupted_package(match):
+                full_match = match.group(0)
+                # Se houver espaços extras, mantém apenas a última parte antes dos dois pontos
+                if "  " in full_match:
+                    parts = full_match.split(":")[0].split()
+                    if len(parts) > 1:
+                        # Mantém apenas a última parte que parece ser o nome real do pacote
+                        return f"  {parts[-1]}: {match.group(1)}"
+                return full_match
+            
+            # Aplica correção para padrões como "just_au  on_audio_query: ^3.0.0"
+            pubspec_content = re.sub(r'(\w+\s{2,}\w+):\s*([^\n]+)', fix_corrupted_package, pubspec_content)
+            if pubspec_content != pubspec_path.read_text(encoding="utf-8"):
+                modified = True
+                log.ok("🔍 Corrigidos nomes de pacotes com espaços extras")
+            
+            # Remove espaços extras no início de linhas
+            lines = pubspec_content.split("\n")
+            fixed_lines = []
+            for line in lines:
+                if line.startswith("  ") and not line.startswith("    ") and ":" in line:
+                    # Remove espaços extras, mantendo apenas 2 espaços
+                    fixed_lines.append("  " + line.lstrip())
+                    modified = True
+                else:
+                    fixed_lines.append(line)
+            
+            if modified:
+                pubspec_path.write_text("\n".join(fixed_lines), encoding="utf-8")
+                return True
+        
+        except Exception as e:
+            log.warn(f"Erro ao corrigir sintaxe do pubspec.yaml: {e}")
         
         return False
 
