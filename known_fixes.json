@@ -193,6 +193,178 @@
       "explanation": "Plugins Android antigos não têm namespace declarado no build.gradle, exigido pelo Android Gradle Plugin 8.0+. O orquestrador detecta e corrige automaticamente adicionando namespace baseado no package do AndroidManifest.xml",
       "times_applied": 0,
       "source": "manual"
+    },
+    {
+      "id": "flutter_sdk_version",
+      "description": "Versão do Flutter SDK incompatível com o projeto",
+      "error_patterns": [
+        "Flutter SDK version",
+        "requires Flutter SDK",
+        "SDK version is too low",
+        "SDK version is too high"
+      ],
+      "context_patterns": [
+        "pubspec.yaml",
+        "environment"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Atualize o Flutter SDK ou ajuste a versão mínima no pubspec.yaml",
+      "explanation": "O projeto requer uma versão específica do Flutter SDK. Verifique o campo 'sdk' em pubspec.yaml e atualize o Flutter SDK se necessário.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "dart_null_safety",
+      "description": "Erros de null safety em código Dart",
+      "error_patterns": [
+        "Null safety operator",
+        "The value 'null' can't be assigned to a variable of type",
+        "A value of type 'Null' can't be assigned to a variable of type"
+      ],
+      "context_patterns": [
+        "!",
+        "?",
+        "late"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione operadores de null safety (!, ?, late) ou verifique se a variável pode ser nula",
+      "explanation": "Dart 2.12+ usa null safety por padrão. Use operadores !, ?, e late para lidar com valores nulos.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "material_import_missing",
+      "description": "Import de Material Design ausente",
+      "error_patterns": [
+        "Undefined name 'Colors'",
+        "Undefined name 'Theme'",
+        "Undefined name 'Scaffold'",
+        "Undefined name 'AppBar'",
+        "Undefined name 'Text'",
+        "Undefined name 'Container'"
+      ],
+      "context_patterns": [
+        "Colors",
+        "Theme",
+        "Scaffold"
+      ],
+      "type": "import_replace",
+      "operations": [],
+      "ensure_imports": [
+        "import 'package:flutter/material.dart';"
+      ],
+      "fix_hint": "Adicione import 'package:flutter/material.dart';",
+      "explanation": "Widgets do Material Design como Colors, Theme, Scaffold, AppBar, Text e Container requerem o import de material.dart",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "cupertino_import_missing",
+      "description": "Import de Cupertino (iOS) ausente",
+      "error_patterns": [
+        "Undefined name 'CupertinoApp'",
+        "Undefined name 'CupertinoButton'",
+        "Undefined name 'CupertinoTextField'"
+      ],
+      "context_patterns": [
+        "CupertinoApp",
+        "CupertinoButton"
+      ],
+      "type": "import_replace",
+      "operations": [],
+      "ensure_imports": [
+        "import 'package:flutter/cupertino.dart';"
+      ],
+      "fix_hint": "Adicione import 'package:flutter/cupertino.dart';",
+      "explanation": "Widgets estilo iOS como CupertinoApp, CupertinoButton e CupertinoTextField requerem o import de cupertino.dart",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "async_await_missing",
+      "description": "Função assíncrona sem async/await",
+      "error_patterns": [
+        "The return type 'Future<String>' isn't a 'String'",
+        "A value of type 'Future<String>' can't be assigned to a variable of type 'String'",
+        "await can only be used in an async function"
+      ],
+      "context_patterns": [
+        "Future",
+        "async"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione 'async' à função e 'await' às chamadas assíncronas",
+      "explanation": "Funções que retornam Future precisam ser marcadas com 'async' e as chamadas precisam usar 'await' para obter o valor",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "http_import_missing",
+      "description": "Import de pacote HTTP ausente",
+      "error_patterns": [
+        "Undefined name 'http'",
+        "The method 'get' isn't defined for the type",
+        "The method 'post' isn't defined for the type"
+      ],
+      "context_patterns": [
+        "http.get",
+        "http.post"
+      ],
+      "type": "import_replace",
+      "operations": [],
+      "ensure_imports": [
+        "import 'package:http/http.dart' as http;"
+      ],
+      "fix_hint": "Adicione import 'package:http/http.dart' as http;",
+      "explanation": "O pacote http fornece métodos para requisições HTTP como get, post, put, delete",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "shared_preferences_import",
+      "description": "Import de SharedPreferences ausente",
+      "error_patterns": [
+        "Undefined name 'SharedPreferences'",
+        "The method 'getInstance' isn't defined"
+      ],
+      "context_patterns": [
+        "SharedPreferences",
+        "getInstance"
+      ],
+      "type": "import_replace",
+      "operations": [],
+      "ensure_imports": [
+        "import 'package:shared_preferences/shared_preferences.dart';"
+      ],
+      "fix_hint": "Adicione import 'package:shared_preferences/shared_preferences.dart';",
+      "explanation": "O pacote shared_preferences permite armazenar dados persistentes no dispositivo",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "provider_import_missing",
+      "description": "Import de Provider ausente",
+      "error_patterns": [
+        "Undefined name 'ChangeNotifier'",
+        "Undefined name 'Provider'",
+        "The method 'of' isn't defined"
+      ],
+      "context_patterns": [
+        "ChangeNotifier",
+        "Provider"
+      ],
+      "type": "import_replace",
+      "operations": [],
+      "ensure_imports": [
+        "import 'package:provider/provider.dart';"
+      ],
+      "fix_hint": "Adicione import 'package:provider/provider.dart';",
+      "explanation": "O pacote provider fornece gerenciamento de estado com ChangeNotifier e Provider",
+      "times_applied": 0,
+      "source": "manual"
     }
   ],
   "package_versions": {

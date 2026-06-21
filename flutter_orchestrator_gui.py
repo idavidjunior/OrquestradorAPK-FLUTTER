@@ -634,6 +634,18 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
         try:
             self.log.info("🤖 Enviando código para Gemini analisar e corrigir...")
 
+            # Verifica cache local primeiro
+            cache_key = hashlib.md5((code + "\n".join(errors)).encode()).hexdigest()
+            cache_file = Path.home() / ".flutter_orchestrator_cache" / f"gemini_fix_{cache_key}.json"
+            
+            if cache_file.exists():
+                try:
+                    cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                    self.log.ok("🤖 Usando correção em cache (evitando rate limit)")
+                    return cache_data.get("fixed_code")
+                except Exception:
+                    pass  # Cache corrompido, ignora e continua
+
             # Descobre URL funcional
             url = GeminiCodeFixer._working_url(self.api_key)
             if not url:
@@ -681,6 +693,20 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
                     l for l in lines
                     if not l.strip().startswith("```")
                 ).strip()
+
+            # Salva no cache local
+            try:
+                cache_dir = Path.home() / ".flutter_orchestrator_cache"
+                cache_dir.mkdir(exist_ok=True)
+                cache_data = {
+                    "fixed_code": fixed_code,
+                    "timestamp": datetime.now().isoformat(),
+                    "errors": errors
+                }
+                cache_file.write_text(json.dumps(cache_data, indent=2), encoding="utf-8")
+                self.log.ok("🤖 Correção salva em cache local")
+            except Exception as e:
+                self.log.warn(f"🤖 Não foi possível salvar cache: {e}")
 
             self.log.ok("🤖 Gemini retornou código corrigido")
             return fixed_code
@@ -2125,6 +2151,46 @@ class FlutterOrchestratorGUI(ctk.CTk):
             build_errors: list[str] = []
             build_flag = "--" + self.build_type.get()  # definido aqui — sempre disponível
 
+            # ── ETAPA 2b: Verificação prévia de compatibilidade de plugins Android ──
+            if source_type == "code":
+                self.log.sep()
+                self.log.info("[2b] 🔍 Verificando compatibilidade de plugins Android...")
+                self._set_status("🔍 Verificando compatibilidade de plugins...", "#ff9800")
+                
+                compatibility_issues = self._check_android_plugin_compatibility(project, self.log)
+                if compatibility_issues:
+                    self.log.warn(f"🔍 {len(compatibility_issues)} problema(s) de compatibilidade detectado(s):")
+                    for issue in compatibility_issues:
+                        self.log.warn(f"  - {issue}")
+                    self.log.info("🔍 Tentando correções automáticas...")
+                    
+                    # Tenta corrigir problemas de compatibilidade
+                    fixed = self._fix_compatibility_issues(compatibility_issues, project, self.log)
+                    if fixed:
+                        self.log.ok("🔍 Correções de compatibilidade aplicadas")
+                    else:
+                        self.log.warn("🔍 Não foi possível corrigir automaticamente — continuando...")
+
+            # ── ETAPA 2c: Verificação de dependências conflitantes ──
+            if source_type == "code":
+                self.log.sep()
+                self.log.info("[2c] 🔍 Verificando dependências conflitantes...")
+                self._set_status("🔍 Verificando dependências conflitantes...", "#ff9800")
+                
+                conflicts = self._check_dependency_conflicts(project, self.log)
+                if conflicts:
+                    self.log.warn(f"🔍 {len(conflicts)} conflito(s) de dependência detectado(s):")
+                    for conflict in conflicts:
+                        self.log.warn(f"  - {conflict}")
+                    self.log.info("🔍 Tentando resolver conflitos automaticamente...")
+                    
+                    # Tenta resolver conflitos
+                    resolved = self._resolve_dependency_conflicts(conflicts, project, self.log)
+                    if resolved:
+                        self.log.ok("🔍 Conflitos de dependência resolvidos")
+                    else:
+                        self.log.warn("🔍 Não foi possível resolver automaticamente — continuando...")
+
             # ── ETAPA 3: Build local ─────────────
             self.log.sep()
             self.log.info("[3/5] Build local...")
@@ -2135,9 +2201,18 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 runner.flutter_cmd(["clean"], project, fail_on_error=False)
 
                 self._set_status("Baixando dependências...", "#ffc107")
-                pub_ok = runner.flutter_cmd(["pub", "get"], project)
+                # Retry inteligente para pub get com backoff exponencial
+                pub_ok = False
+                for attempt, wait in enumerate((0, 5, 10, 15)):
+                    if wait:
+                        self.log.warn(f"📦 pub get falhou — aguardando {wait}s (tentativa {attempt + 1}/4)...")
+                        time.sleep(wait)
+                    pub_ok = runner.flutter_cmd(["pub", "get"], project)
+                    if pub_ok:
+                        break
+                
                 if not pub_ok:
-                    self.log.warn("pub get falhou — tentando build mesmo assim...")
+                    self.log.warn("📦 pub get falhou após 4 tentativas — tentando build mesmo assim...")
 
                 self._set_status(f"Compilando APK {self.build_type.get()}...", "#ffc107")
                 build_ok, build_errors = runner.flutter_cmd_with_errors(
@@ -2273,6 +2348,49 @@ class FlutterOrchestratorGUI(ctk.CTk):
                         self.log.err(err)
                     self.log.sep()
 
+            # ── ETAPA 3d: Fallback local agressivo antes do CI ──
+            if not local_ok and build_errors:
+                self.log.sep()
+                self.log.info("[3d] 🔧 Tentando correções locais agressivas antes do CI...")
+                self._set_status("🔧 Tentando correções locais agressivas...", "#ff5722")
+                
+                # Tenta downgrade de Flutter SDK se for problema de versão
+                if "Flutter SDK" in "\n".join(build_errors) or "requires Flutter SDK" in "\n".join(build_errors):
+                    self.log.info("🔧 Detectado problema de versão do Flutter SDK")
+                    # Tenta usar versão estável do Flutter
+                    runner.flutter_cmd(["downgrade", "stable"], project, fail_on_error=False)
+                    runner.flutter_cmd(["clean"], project, fail_on_error=False)
+                    runner.flutter_cmd(["pub", "get"], project)
+                    build_ok, build_errors = runner.flutter_cmd_with_errors(
+                        ["build", "apk", build_flag], project)
+                    if build_ok:
+                        apk = self._find_apk(project)
+                        if apk:
+                            local_ok = True
+                            self.log.ok("🔧 Build concluído após downgrade do Flutter SDK!")
+                
+                # Tenta limpar cache do Flutter se for problema de cache corrompido
+                if not local_ok and "cache" in "\n".join(build_errors).lower():
+                    self.log.info("🔧 Detectado problema de cache do Flutter")
+                    runner.flutter_cmd(["clean"], project, fail_on_error=False)
+                    # Limpa cache do pub
+                    pub_cache = Path.home() / ".pub-cache"
+                    if pub_cache.exists():
+                        try:
+                            import shutil
+                            shutil.rmtree(pub_cache / "hosted" / "pub.dev" / ".cache", ignore_errors=True)
+                            self.log.ok("🔧 Cache do pub limpo")
+                        except Exception:
+                            pass
+                    runner.flutter_cmd(["pub", "get"], project)
+                    build_ok, build_errors = runner.flutter_cmd_with_errors(
+                        ["build", "apk", build_flag], project)
+                    if build_ok:
+                        apk = self._find_apk(project)
+                        if apk:
+                            local_ok = True
+                            self.log.ok("🔧 Build concluído após limpeza de cache!")
+
             # ── ETAPA 4: Fallback CI ─────────────
             if not local_ok:
                 self.log.sep()
@@ -2404,6 +2522,203 @@ class FlutterOrchestratorGUI(ctk.CTk):
             
         except Exception:
             return False
+
+    @staticmethod
+    def _check_android_plugin_compatibility(project: Path, log: Logger) -> list[str]:
+        """
+        Verifica compatibilidade de plugins Android antes do build.
+        Detecta plugins conhecidos por terem problemas com versões do Android Gradle Plugin.
+        """
+        issues = []
+        
+        try:
+            pubspec_path = project / "pubspec.yaml"
+            if not pubspec_path.exists():
+                return issues
+            
+            pubspec_content = pubspec_path.read_text(encoding="utf-8")
+            
+            # Lista de plugins conhecidos com problemas de compatibilidade
+            problematic_plugins = {
+                "on_audio_query": {
+                    "bad_versions": ["^2.9.0", "2.9.0"],
+                    "good_version": "^3.0.0",
+                    "issue": "Versão 2.9.0 não tem namespace no build.gradle (incompatível com AGP 8.0+)"
+                },
+                "permission_handler": {
+                    "bad_versions": ["^11.3.1", "11.3.1"],
+                    "good_version": "^12.0.0",
+                    "issue": "Versão 11.3.1 pode ter problemas de compatibilidade com Android 14+"
+                },
+            }
+            
+            for plugin, info in problematic_plugins.items():
+                # Verifica se o plugin está no pubspec.yaml
+                if plugin in pubspec_content:
+                    # Extrai a versão atual
+                    version_match = re.search(rf'{re.escape(plugin)}:\s*([^\s\n]+)', pubspec_content)
+                    if version_match:
+                        current_version = version_match.group(1).strip()
+                        if current_version in info["bad_versions"]:
+                            issues.append(
+                                f"{plugin}: {current_version} - {info['issue']}. "
+                                f"Recomendado: {info['good_version']}"
+                            )
+            
+            # Verifica se há plugins Android sem namespace no cache local
+            pub_cache = Path.home() / ".pub-cache" / "hosted" / "pub.dev"
+            if pub_cache.exists():
+                for plugin_dir in pub_cache.glob("*_android-*"):
+                    build_gradle = plugin_dir / "android" / "build.gradle"
+                    if build_gradle.exists():
+                        build_gradle_content = build_gradle.read_text(encoding="utf-8")
+                        if "namespace" not in build_gradle_content.lower():
+                            plugin_name = plugin_dir.name.split("-")[0]
+                            issues.append(
+                                f"{plugin_name}: Plugin Android não tem namespace no build.gradle. "
+                                f"Será corrigido automaticamente durante o build se ocorrer erro."
+                            )
+        
+        except Exception as e:
+            log.warn(f"Erro ao verificar compatibilidade de plugins: {e}")
+        
+        return issues
+
+    @staticmethod
+    def _fix_compatibility_issues(issues: list[str], project: Path, log: Logger) -> bool:
+        """
+        Tenta corrigir problemas de compatibilidade de plugins automaticamente.
+        """
+        try:
+            pubspec_path = project / "pubspec.yaml"
+            if not pubspec_path.exists():
+                return False
+            
+            pubspec_content = pubspec_path.read_text(encoding="utf-8")
+            modified = False
+            
+            # Correções conhecidas
+            fixes = {
+                "on_audio_query: ^2.9.0": "on_audio_query: ^3.0.0",
+                "on_audio_query: 2.9.0": "on_audio_query: ^3.0.0",
+                "permission_handler: ^11.3.1": "permission_handler: ^12.0.0",
+                "permission_handler: 11.3.1": "permission_handler: ^12.0.0",
+            }
+            
+            for issue in issues:
+                for old, new in fixes.items():
+                    if old in issue and old in pubspec_content:
+                        pubspec_content = pubspec_content.replace(old, new)
+                        log.ok(f"🔍 Corrigido: {old} → {new}")
+                        modified = True
+            
+            if modified:
+                pubspec_path.write_text(pubspec_content, encoding="utf-8")
+                return True
+        
+        except Exception as e:
+            log.warn(f"Erro ao corrigir problemas de compatibilidade: {e}")
+        
+        return False
+
+    @staticmethod
+    def _check_dependency_conflicts(project: Path, log: Logger) -> list[str]:
+        """
+        Verifica conflitos de dependências no pubspec.yaml.
+        Detecta pacotes que podem ter conflitos de versão ou incompatibilidades.
+        """
+        conflicts = []
+        
+        try:
+            pubspec_path = project / "pubspec.yaml"
+            if not pubspec_path.exists():
+                return conflicts
+            
+            pubspec_content = pubspec_path.read_text(encoding="utf-8")
+            
+            # Lista de pacotes conhecidos por terem conflitos
+            known_conflicts = {
+                "http": ["dio", "get"],  # http e dio/get podem conflitar
+                "dio": ["http", "get"],  # dio e http/get podem conflitar
+                "get": ["http", "dio"],  # get e http/dio podem conflitar
+                "path_provider": ["path"],  # path_provider e path podem conflitar
+                "shared_preferences": ["hive", "sqflite"],  # diferentes soluções de persistência
+            }
+            
+            for package, conflicting_packages in known_conflicts.items():
+                if package in pubspec_content:
+                    for conflicting in conflicting_packages:
+                        if conflicting in pubspec_content:
+                            conflicts.append(
+                                f"Conflito potencial: {package} e {conflicting} podem ter incompatibilidades. "
+                                f"Considere usar apenas um deles."
+                            )
+            
+            # Verifica versões muito antigas de pacotes populares
+            old_versions = {
+                "flutter": "2.0.0",
+                "dio": "4.0.0",
+                "http": "0.13.0",
+                "provider": "5.0.0",
+            }
+            
+            for package, min_version in old_versions.items():
+                if package in pubspec_content:
+                    version_match = re.search(rf'{re.escape(package)}:\s*([^\s\n]+)', pubspec_content)
+                    if version_match:
+                        current_version = version_match.group(1).strip().replace("^", "").replace(">=", "")
+                        try:
+                            # Comparação simples de versões
+                            if current_version < min_version:
+                                conflicts.append(
+                                    f"{package}: versão {current_version} é muito antiga. "
+                                    f"Recomendado: >= {min_version}"
+                                )
+                        except Exception:
+                            pass  # Falha na comparação de versão, ignora
+        
+        except Exception as e:
+            log.warn(f"Erro ao verificar conflitos de dependências: {e}")
+        
+        return conflicts
+
+    @staticmethod
+    def _resolve_dependency_conflicts(conflicts: list[str], project: Path, log: Logger) -> bool:
+        """
+        Tenta resolver conflitos de dependências automaticamente.
+        """
+        try:
+            pubspec_path = project / "pubspec.yaml"
+            if not pubspec_path.exists():
+                return False
+            
+            pubspec_content = pubspec_path.read_text(encoding="utf-8")
+            modified = False
+            
+            # Resoluções conhecidas
+            resolutions = {
+                # Remove http se dio estiver presente (dio é mais moderno)
+                ("http", "dio"): lambda content: re.sub(r'http:\s*[^\n]+\n', '', content),
+                # Remove dio se http estiver presente (http é mais simples)
+                ("dio", "http"): lambda content: re.sub(r'dio:\s*[^\n]+\n', '', content),
+            }
+            
+            for conflict in conflicts:
+                for (pkg1, pkg2), resolver in resolutions.items():
+                    if pkg1 in conflict and pkg2 in conflict:
+                        if pkg1 in pubspec_content and pkg2 in pubspec_content:
+                            pubspec_content = resolver(pubspec_content)
+                            log.ok(f"🔍 Removido {pkg1} para resolver conflito com {pkg2}")
+                            modified = True
+            
+            if modified:
+                pubspec_path.write_text(pubspec_content, encoding="utf-8")
+                return True
+        
+        except Exception as e:
+            log.warn(f"Erro ao resolver conflitos de dependências: {e}")
+        
+        return False
 
     @staticmethod
     def _find_apk(project: Path) -> str | None:
