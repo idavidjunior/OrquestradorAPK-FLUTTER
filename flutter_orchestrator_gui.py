@@ -24,6 +24,13 @@ from datetime import datetime
 from pathlib import Path
 from urllib.request import urlopen, Request
 
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+    print("AVISO: PyYAML não instalado. Algumas funcionalidades estarão limitadas.")
+
 # ─────────────────────────────────────────────────────────────
 #  Verifica suporte a GUI
 # ─────────────────────────────────────────────────────────────
@@ -561,6 +568,7 @@ class GeminiCodeFixer:
     """
     Usa a API Gemini para analisar erros do compilador Dart,
     corrigir o código e retornar o código corrigido com explicações.
+    Inclui tratamento robusto para erro 429 (Rate Limit Exceeded).
     """
     # Tenta modelos em ordem até um funcionar
     MODELS = [
@@ -570,6 +578,10 @@ class GeminiCodeFixer:
         "gemini-pro",
     ]
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    
+    # Configurações de retry para erro 429
+    MAX_RETRIES = 3
+    RETRY_DELAY_SECONDS = 5  # Delay inicial entre retries
 
     @classmethod
     def _working_url(cls, api_key: str) -> str | None:
@@ -598,7 +610,8 @@ class GeminiCodeFixer:
     def fix(self, code: str, errors: list[str]) -> str | None:
         """
         Envia código + erros para o Gemini e retorna código corrigido.
-        Retorna None se falhar.
+        Retorna None se falhar após retries.
+        Implementa retry automático com backoff exponencial para erro 429.
         """
         if not self.api_key:
             return None
@@ -636,8 +649,13 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
             }
         }
 
-        try:
-            self.log.info("🤖 Enviando código para Gemini analisar e corrigir...")
+        # Tenta com retry para erro 429
+        last_error = None
+        delay = self.RETRY_DELAY_SECONDS
+        
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                self.log.info(f"🤖 Enviando código para Gemini analisar e corrigir... (tentativa {attempt}/{self.MAX_RETRIES})")
 
             # Verifica cache local primeiro
             cache_key = hashlib.md5((code + "\n".join(errors)).encode()).hexdigest()
@@ -681,23 +699,23 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
                 self.log.err("🤖 Gemini: esgotadas tentativas após rate limit")
                 return None
 
-            # Extrai o texto da resposta
-            fixed_code = (resp.get("candidates", [{}])[0]
-                             .get("content", {})
-                             .get("parts", [{}])[0]
-                             .get("text", "")).strip()
+                # Extrai o texto da resposta
+                fixed_code = (resp.get("candidates", [{}])[0]
+                                 .get("content", {})
+                                 .get("parts", [{}])[0]
+                                 .get("text", "")).strip()
 
-            if not fixed_code:
-                self.log.err("Gemini retornou resposta vazia")
-                return None
+                if not fixed_code:
+                    self.log.err("Gemini retornou resposta vazia")
+                    return None
 
-            # Remove marcadores de código se Gemini os incluiu mesmo assim
-            if fixed_code.startswith("```"):
-                lines = fixed_code.split("\n")
-                fixed_code = "\n".join(
-                    l for l in lines
-                    if not l.strip().startswith("```")
-                ).strip()
+                # Remove marcadores de código se Gemini os incluiu mesmo assim
+                if fixed_code.startswith("```"):
+                    lines = fixed_code.split("\n")
+                    fixed_code = "\n".join(
+                        l for l in lines
+                        if not l.strip().startswith("```")
+                    ).strip()
 
             # Salva no cache local
             try:
@@ -716,9 +734,29 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
             self.log.ok("🤖 Gemini retornou código corrigido")
             return fixed_code
 
-        except Exception as e:
-            self.log.err(f"🤖 Gemini API falhou: {e}")
-            return None
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                
+                # Detecta erro 429 (Rate Limit Exceeded)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
+                    if attempt < self.MAX_RETRIES:
+                        self.log.warn(f"⚠️ Limite de requisições atingido (erro 429). Aguardando {delay}s antes de tentar novamente...")
+                        time.sleep(delay)
+                        delay *= 2  # Backoff exponencial
+                        continue
+                    else:
+                        self.log.err("🤖 Gemini API: Limite de requisições excedido após todas as tentativas.")
+                        self.log.info("💡 Dica: Aguarde alguns minutos antes de tentar novamente ou verifique sua cota no Google AI Studio.")
+                        return None
+                else:
+                    # Outro erro não relacionado a rate limit
+                    self.log.err(f"🤖 Gemini API falhou: {e}")
+                    return None
+        
+        # Se chegou aqui, todas as tentativas falharam
+        self.log.err(f"🤖 Gemini API falhou após {self.MAX_RETRIES} tentativas: {last_error}")
+        return None
 
     @staticmethod
     def validate_key(api_key: str) -> tuple[bool, str]:
@@ -1031,9 +1069,124 @@ class ProjectSourceManager:
         return dart, pubspec_frag, manifest
 
     @staticmethod
+    def _separate_code_fragments(raw_code: str, log: Logger) -> dict:
+        """
+        Algoritmo inteligente para separar código Dart, YAML e XML colados juntos.
+        Detecta boundaries por padrões de sintaxe e retorna fragmentos separados.
+        
+        Retorna: {
+            'dart': str,
+            'pubspec_yaml': str | None,
+            'android_manifest': str | None,
+            'other_files': list[tuple[str, str]]  # (filename, content)
+        }
+        """
+        result = {
+            'dart': '',
+            'pubspec_yaml': None,
+            'android_manifest': None,
+            'other_files': []
+        }
+        
+        lines = raw_code.split('\n')
+        current_fragment = []
+        current_type = 'dart'  # default
+        dart_code_started = False
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            
+            # Detecção de início de pubspec.yaml
+            if stripped.startswith('name:') and ':' in stripped and not dart_code_started:
+                # Verifica se parece YAML (chave: valor sem ponto-e-vírgula)
+                if not ';' in line and '=' not in line:
+                    if current_fragment and current_type == 'dart':
+                        result['dart'] = '\n'.join(current_fragment)
+                        current_fragment = []
+                    current_type = 'pubspec'
+                    current_fragment = [line]
+                    log.info("📝 Detectado bloco pubspec.yaml")
+                    i += 1
+                    continue
+            
+            # Detecção de início de AndroidManifest.xml
+            if '<manifest' in stripped or '<?xml' in stripped:
+                if current_fragment and current_type == 'dart':
+                    result['dart'] = '\n'.join(current_fragment)
+                elif current_fragment and current_type == 'pubspec':
+                    result['pubspec_yaml'] = '\n'.join(current_fragment)
+                current_fragment = [line]
+                current_type = 'android_manifest'
+                log.info("📱 Detectado bloco AndroidManifest.xml")
+                i += 1
+                continue
+            
+            # Detecção de fim de bloco YAML (volta para Dart)
+            if current_type == 'pubspec':
+                # Se encontrar uma linha que claramente é Dart (import, class, void main, etc.)
+                if (stripped.startswith('import ') or 
+                    stripped.startswith('class ') or 
+                    stripped.startswith('void main') or
+                    stripped.startswith('//') or
+                    (stripped and not ':' in stripped and not stripped.startswith('-') and 
+                     not stripped.startswith(' ') and not stripped.startswith('#'))):
+                    # Fim do bloco YAML
+                    result['pubspec_yaml'] = '\n'.join(current_fragment)
+                    current_fragment = [line]
+                    current_type = 'dart'
+                    log.info("🔄 Retornando para código Dart após pubspec")
+                    i += 1
+                    continue
+            
+            # Detecção de fim de AndroidManifest.xml
+            if current_type == 'android_manifest':
+                if '</manifest>' in line:
+                    current_fragment.append(line)
+                    result['android_manifest'] = '\n'.join(current_fragment)
+                    current_fragment = []
+                    current_type = 'dart'
+                    log.info("🔄 Retornando para código Dart após AndroidManifest")
+                    i += 1
+                    continue
+            
+            current_fragment.append(line)
+            
+            # Marca que código Dart começou
+            if current_type == 'dart' and (stripped.startswith('import') or 
+                                            stripped.startswith('class') or
+                                            stripped.startswith('void main') or
+                                            stripped.startswith('//')):
+                dart_code_started = True
+            
+            i += 1
+        
+        # Processa fragmento final
+        if current_fragment:
+            if current_type == 'dart':
+                result['dart'] = '\n'.join(current_fragment)
+            elif current_type == 'pubspec':
+                result['pubspec_yaml'] = '\n'.join(current_fragment)
+            elif current_type == 'android_manifest':
+                result['android_manifest'] = '\n'.join(current_fragment)
+        
+        # Log de resumo
+        dart_lines = len(result['dart'].split('\n')) if result['dart'] else 0
+        yaml_lines = len(result['pubspec_yaml'].split('\n')) if result['pubspec_yaml'] else 0
+        xml_lines = len(result['android_manifest'].split('\n')) if result['android_manifest'] else 0
+        
+        log.info(f"📊 Análise concluída: {dart_lines} linhas Dart, {yaml_lines} linhas YAML, {xml_lines} linhas XML")
+        
+        return result
+
+    @staticmethod
     def _detect_and_inject_deps(code: str, project_dir: Path, log: Logger,
-                                kb=None):
-        """Lê imports do código e injeta dependências no pubspec.yaml."""
+                                kb=None, force_pub_add: bool = False):
+        """
+        Lê imports do código e injeta dependências no pubspec.yaml.
+        Se force_pub_add=True, usa 'flutter pub add' para instalar pacotes.
+        """
         imports = re.findall(r"import\s+'package:([^/]+)/", code)
         imports += re.findall(r'import\s+"package:([^/]+)/', code)
         packages = set(imports) - {"flutter", "flutter_test", "flutter_localizations",
@@ -1085,6 +1238,23 @@ class ProjectSourceManager:
         if unknown:
             log.warn(f"Pacotes desconhecidos (versão não mapeada): {', '.join(unknown)}")
             log.warn("  Adicione manualmente ao pubspec.yaml se necessário")
+        
+        # Se force_pub_add estiver habilitado ou houver pacotes desconhecidos, usa flutter pub add
+        if force_pub_add or unknown:
+            pkgs_to_add = unknown if force_pub_add else added + unknown
+            if pkgs_to_add:
+                log.info("Executando 'flutter pub add' para garantir instalação...")
+                try:
+                    cmd = ["flutter", "pub", "add"] + pkgs_to_add
+                    proc = subprocess.run(cmd, cwd=project_dir, capture_output=True, text=True, timeout=60)
+                    if proc.returncode == 0:
+                        log.ok(f"Pacotes instalados via 'flutter pub add': {', '.join(pkgs_to_add)}")
+                    else:
+                        log.warn(f"'flutter pub add' retornou aviso: {proc.stderr[:200]}")
+                except subprocess.TimeoutExpired:
+                    log.err("Timeout ao executar 'flutter pub add'")
+                except Exception as e:
+                    log.err(f"Erro ao executar 'flutter pub add': {e}")
 
     @staticmethod
     def _analyse_code_issues(code: str, log: Logger) -> list[str]:
