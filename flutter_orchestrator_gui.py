@@ -897,6 +897,30 @@ class ProjectSourceManager:
                 log.ok(f"pubspec: + {pkg}: {version}")
 
         if changed:
+            # Valida YAML antes de escrever
+            try:
+                import yaml
+                yaml.safe_load(pubspec)
+            except yaml.YAMLError as e:
+                log.warn(f"⚠️ Erro YAML detectado em _inject_pubspec_packages: {e}")
+                # Tenta corrigir erros estruturais básicos
+                lines = pubspec.split("\n")
+                fixed_lines = []
+                for line in lines:
+                    if line.count(":") > 1 and not line.strip().startswith("#"):
+                        # Divide múltiplos mapeamentos
+                        parts = line.split(":")
+                        if len(parts) > 1:
+                            fixed_lines.append(f"{parts[0]}: {parts[1].strip()}")
+                            for i in range(2, len(parts)):
+                                if parts[i].strip():
+                                    fixed_lines.append(f"  {parts[i].strip().split()[0]}: {' '.join(parts[i].strip().split()[1:])}")
+                        else:
+                            fixed_lines.append(line)
+                    else:
+                        fixed_lines.append(line)
+                pubspec = "\n".join(fixed_lines)
+            
             pubspec_path.write_text(pubspec, encoding="utf-8")
 
     @staticmethod
