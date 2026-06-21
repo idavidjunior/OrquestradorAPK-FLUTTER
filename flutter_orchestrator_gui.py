@@ -2749,7 +2749,7 @@ class FlutterOrchestratorGUI(ctk.CTk):
     def _check_pubspec_syntax(project: Path, log: Logger) -> list[str]:
         """
         Verifica erros de sintaxe no pubspec.yaml.
-        Detecta nomes de pacotes inválidos, espaços extras, etc.
+        Detecta nomes de pacotes inválidos, espaços extras, erros estruturais YAML, etc.
         """
         errors = []
         
@@ -2761,6 +2761,21 @@ class FlutterOrchestratorGUI(ctk.CTk):
             pubspec_content = pubspec_path.read_text(encoding="utf-8")
             lines = pubspec_content.split("\n")
             
+            # Primeiro, tenta validar YAML usando o parser
+            try:
+                import yaml
+                yaml.safe_load(pubspec_content)
+            except yaml.YAMLError as e:
+                # Extrai informações do erro YAML
+                if hasattr(e, 'problem_mark'):
+                    line_num = e.problem_mark.line + 1
+                    col_num = e.problem_mark.column + 1
+                    error_msg = str(e).split("\n")[0] if "\n" in str(e) else str(e)
+                    errors.append(f"Linha {line_num}, coluna {col_num}: Erro YAML: {error_msg}")
+                else:
+                    errors.append(f"Erro YAML: {str(e)}")
+            
+            # Verificações adicionais de sintaxe
             for i, line in enumerate(lines, 1):
                 # Detecta espaços extras em nomes de pacotes
                 if ":" in line and not line.strip().startswith("#"):
@@ -2772,6 +2787,10 @@ class FlutterOrchestratorGUI(ctk.CTk):
                     # Detecta nomes de pacotes com caracteres inválidos
                     if package_part and not package_part.replace("_", "").replace("-", "").isalnum():
                         errors.append(f"Linha {i}: Nome de pacote inválido: '{package_part}'")
+                    
+                    # Detecta múltiplos mapeamentos na mesma linha (ex: "version: 1.0.0+  environment: 1")
+                    if line.count(":") > 1 and not line.strip().startswith("#"):
+                        errors.append(f"Linha {i}: Múltiplos mapeamentos na mesma linha: '{line.strip()}'")
                 
                 # Detecta linhas com espaços extras no início (indentação incorreta)
                 if line.startswith("  ") and not line.startswith("    "):
@@ -2802,6 +2821,30 @@ class FlutterOrchestratorGUI(ctk.CTk):
             pubspec_content = pubspec_path.read_text(encoding="utf-8")
             modified = False
             
+            # Corrige múltiplos mapeamentos na mesma linha (ex: "version: 1.0.0+  environment: 1")
+            lines = pubspec_content.split("\n")
+            fixed_lines = []
+            for line in lines:
+                if line.count(":") > 1 and not line.strip().startswith("#"):
+                    # Divide a linha em múltiplas linhas separadas
+                    parts = line.split(":")
+                    if len(parts) > 1:
+                        # Primeira parte
+                        fixed_lines.append(f"{parts[0]}: {parts[1].strip()}")
+                        # Partes restantes
+                        for i in range(2, len(parts)):
+                            if parts[i].strip():
+                                fixed_lines.append(f"  {parts[i].strip().split()[0]}: {' '.join(parts[i].strip().split()[1:])}")
+                        modified = True
+                        log.ok(f"🔍 Corrigida linha com múltiplos mapeamentos: '{line.strip()}'")
+                    else:
+                        fixed_lines.append(line)
+                else:
+                    fixed_lines.append(line)
+            
+            if modified:
+                pubspec_content = "\n".join(fixed_lines)
+            
             # Corrige nomes de pacotes com espaços extras (ex: "just_au  on_audio_query" -> "on_audio_query")
             # O padrão detecta algo como "palavra1  palavra2:" e mantém apenas a segunda parte
             def fix_corrupted_package(match):
@@ -2815,8 +2858,9 @@ class FlutterOrchestratorGUI(ctk.CTk):
                 return full_match
             
             # Aplica correção para padrões como "just_au  on_audio_query: ^3.0.0"
-            pubspec_content = re.sub(r'(\w+\s{2,}\w+):\s*([^\n]+)', fix_corrupted_package, pubspec_content)
-            if pubspec_content != pubspec_path.read_text(encoding="utf-8"):
+            new_content = re.sub(r'(\w+\s{2,}\w+):\s*([^\n]+)', fix_corrupted_package, pubspec_content)
+            if new_content != pubspec_content:
+                pubspec_content = new_content
                 modified = True
                 log.ok("🔍 Corrigidos nomes de pacotes com espaços extras")
             
