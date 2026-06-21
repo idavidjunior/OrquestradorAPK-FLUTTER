@@ -24,6 +24,13 @@ from datetime import datetime
 from pathlib import Path
 from urllib.request import urlopen, Request
 
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+    print("AVISO: PyYAML não instalado. Algumas funcionalidades estarão limitadas.")
+
 # ─────────────────────────────────────────────────────────────
 #  Verifica suporte a GUI
 # ─────────────────────────────────────────────────────────────
@@ -1007,11 +1014,18 @@ class ProjectSourceManager:
         if fragments['pubspec_yaml']:
             log.info("📝 Processando pubspec.yaml colado...")
             try:
-                import yaml
-                colled_pubspec = yaml.safe_load(fragments['pubspec_yaml'])
-                if colled_pubspec and 'dependencies' in colled_pubspec:
-                    log.ok(f"  Dependências encontradas no pubspec colado: {list(colled_pubspec['dependencies'].keys())}")
-                    # As dependências serão detectadas e injetadas automaticamente abaixo
+                if YAML_AVAILABLE:
+                    colled_pubspec = yaml.safe_load(fragments['pubspec_yaml'])
+                    if colled_pubspec and 'dependencies' in colled_pubspec:
+                        log.ok(f"  Dependências encontradas no pubspec colado: {list(colled_pubspec['dependencies'].keys())}")
+                else:
+                    log.warn("PyYAML não disponível - analisando manualmente pubspec colado")
+                    # Fallback simples: procura linhas com "package_name:"
+                    for line in fragments['pubspec_yaml'].split('\n'):
+                        if ':' in line and not line.strip().startswith('#'):
+                            parts = line.strip().split(':')
+                            if len(parts) >= 2 and not parts[0] in ['name', 'version', 'environment', 'flutter', 'description']:
+                                log.info(f"  Dependência detectada manualmente: {parts[0]}")
             except Exception as e:
                 log.warn(f"  Não foi possível analisar pubspec colado: {e}")
         

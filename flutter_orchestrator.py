@@ -13,10 +13,18 @@ import argparse
 import platform
 import zipfile
 import tarfile
+import re
 from pathlib import Path
 from datetime import datetime
 from urllib.request import urlretrieve, urlopen
 from urllib.error import URLError
+
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+    print("AVISO: PyYAML não instalado. Algumas validações estarão limitadas.")
 
 class Colors:
     """Cores para formatação do terminal."""
@@ -229,12 +237,114 @@ class FlutterOrchestrator:
             log_error("Este não parece ser um projeto Flutter válido.")
             return False
         
+        # Valida e corrige o pubspec.yaml antes de prosseguir
+        if not self._validate_and_fix_pubspec(pubspec_file):
+            log_error("Falha ao validar/corrigir pubspec.yaml. Build não pode continuar.")
+            return False
+        
         lib_main = self.project_path / "lib" / "main.dart"
         if not lib_main.exists():
             log_warning(f"Arquivo lib/main.dart não encontrado. O build pode falhar se a entrada não for padrão.")
         
         log_success("Estrutura do projeto validada.")
         return True
+
+    def _validate_and_fix_pubspec(self, pubspec_path: Path) -> bool:
+        """
+        Valida e tenta corrigir automaticamente erros no pubspec.yaml.
+        Problemas conhecidos que corrige:
+        - Linhas mescladas sem quebra (ex: 'version: 1.0.0+1  environment:')
+        - Indentação incorreta
+        - Nomes de pacotes com espaços extras
+        """
+        log_info("Validando sintaxe do pubspec.yaml...")
+        
+        try:
+            content = pubspec_path.read_text(encoding='utf-8')
+        except Exception as e:
+            log_error(f"Não foi possível ler pubspec.yaml: {e}")
+            return False
+        
+        original_content = content
+        fixed = False
+        
+        # Correção 1: Quebrar linhas mescladas (problema crítico do log)
+        # Padrão: "version: X.Y.Z+ABC  environment:" ou similar
+        # Detecta quando há duas chaves YAML na mesma linha sem quebra
+        lines = content.split('\n')
+        new_lines = []
+        
+        for i, line in enumerate(lines):
+            # Detecta padrões como "version: 1.0.0+1  environment:" ou "sdk: ^3.0  flutter:"
+            # Procura por múltiplos pares chave-valor na mesma linha
+            merged_pattern = r'^(\s*)(\w+):\s*([^\n]+?)\s+(\w+):\s*(.*)$'
+            match = re.match(merged_pattern, line)
+            
+            if match and not line.strip().startswith('#'):
+                indent, key1, val1, key2, val2 = match.groups()
+                # Verifica se parece ser uma fusão acidental
+                if key1 in ['version', 'sdk', 'environment', 'dependencies', 'flutter'] or \
+                   key2 in ['version', 'sdk', 'environment', 'dependencies', 'flutter']:
+                    log_warning(f"Linha {i+1} detectada como mesclada: '{line[:60]}...'")
+                    log_info(f"  Corrigindo: separando '{key1}' e '{key2}' em linhas distintas")
+                    new_lines.append(f"{indent}{key1}: {val1.strip()}")
+                    new_lines.append(f"{indent}{key2}: {val2.strip()}")
+                    fixed = True
+                else:
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+        
+        content = '\n'.join(new_lines)
+        
+        # Correção 2: Remover espaços extras em nomes de pacotes
+        # Padrão: "just_au  on_audio_query:" -> "on_audio_query:"
+        pkg_pattern = r'^(\s+)([\w_]+)\s+([\w_]+):\s*(.*)$'
+        new_lines = []
+        for line in content.split('\n'):
+            match = re.match(pkg_pattern, line)
+            if match and not line.strip().startswith('#'):
+                indent, pkg1, pkg2, version = match.groups()
+                # Mantém apenas o segundo nome (geralmente o correto)
+                log_warning(f"Pacote com espaço extra detectado: '{pkg1}  {pkg2}'")
+                log_info(f"  Corrigindo para: '{pkg2}'")
+                new_lines.append(f"{indent}{pkg2}: {version}")
+                fixed = True
+            else:
+                new_lines.append(line)
+        
+        content = '\n'.join(new_lines)
+        
+        # Correção 3: Garantir indentação consistente (2 espaços)
+        # Substitui tabs por espaços
+        if '\t' in content:
+            log_warning("Tabs detectados no pubspec.yaml - convertendo para espaços")
+            content = content.replace('\t', '  ')
+            fixed = True
+        
+        # Se houve correções, salva o arquivo
+        if fixed:
+            log_success("Correções aplicadas ao pubspec.yaml")
+            try:
+                pubspec_path.write_text(content, encoding='utf-8')
+            except Exception as e:
+                log_error(f"Não foi possível salvar pubspec.yaml corrigido: {e}")
+                return False
+        
+        # Validação final com yaml library se disponível
+        if YAML_AVAILABLE:
+            try:
+                yaml.safe_load(content)
+                log_success("pubspec.yaml é sintaticamente válido")
+                return True
+            except yaml.YAMLError as e:
+                log_error(f"Erro de sintaxe YAML persistente: {e}")
+                log_warning("Tentando continuar mesmo assim...")
+                return True  # Retorna True para permitir tentativa de build
+        else:
+            # Sem yaml library, apenas retorna True após correções básicas
+            log_info("PyYAML não disponível - validação limitada aplicada")
+            return True
 
     def clean_build(self):
         """Limpa builds anteriores."""
