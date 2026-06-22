@@ -339,8 +339,9 @@ class FlutterOrchestrator:
                 return True
             except yaml.YAMLError as e:
                 log_error(f"Erro de sintaxe YAML persistente: {e}")
-                log_warning("Tentando continuar mesmo assim...")
-                return True  # Retorna True para permitir tentativa de build
+                log_error("O pubspec.yaml continua inválido após as correções automáticas.")
+                log_error("Corrija manualmente o arquivo antes de tentar o build novamente.")
+                return False  # YAML comprovadamente inválido — abortar é melhor que falhar no meio do build
         else:
             # Sem yaml library, apenas retorna True após correções básicas
             log_info("PyYAML não disponível - validação limitada aplicada")
