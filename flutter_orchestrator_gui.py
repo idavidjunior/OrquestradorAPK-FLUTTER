@@ -17,6 +17,7 @@ import tempfile
 import re
 import json
 import time
+import hashlib
 import zipfile
 import io
 import traceback
@@ -590,9 +591,9 @@ class GeminiCodeFixer:
             url = cls.BASE_URL.format(model=model)
             try:
                 req = Request(
-                    f"{url}?key={api_key}",
+                    url,
                     data=json.dumps({"contents": [{"parts": [{"text": "hi"}]}]}).encode(),
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
                     method="POST"
                 )
                 with urlopen(req, timeout=10) as r:
@@ -649,55 +650,41 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
             }
         }
 
-        # Tenta com retry para erro 429
+        # Verifica cache local primeiro (independe de retries — code+errors não mudam)
+        cache_key = hashlib.md5((code + "\n".join(errors)).encode()).hexdigest()
+        cache_dir = Path.home() / ".flutter_orchestrator_cache"
+        cache_file = cache_dir / f"gemini_fix_{cache_key}.json"
+
+        if cache_file.exists():
+            try:
+                cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                self.log.ok("🤖 Usando correção em cache (evitando rate limit)")
+                return cache_data.get("fixed_code")
+            except Exception:
+                pass  # Cache corrompido, ignora e continua
+
+        # Descobre URL funcional
+        url = GeminiCodeFixer._working_url(self.api_key)
+        if not url:
+            self.log.err("🤖 Nenhum modelo Gemini disponível para esta chave")
+            return None
+
+        self.log.info(f"🤖 Usando: {url.split('/models/')[1].split(':')[0]}")
+        payload_bytes = json.dumps(payload).encode("utf-8")
+        # API key vai no header (evita vazá-la em logs de URL)
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
+
+        # Tenta com retry e backoff exponencial para erro 429
         last_error = None
         delay = self.RETRY_DELAY_SECONDS
-        
+
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
                 self.log.info(f"🤖 Enviando código para Gemini analisar e corrigir... (tentativa {attempt}/{self.MAX_RETRIES})")
 
-            # Verifica cache local primeiro
-            cache_key = hashlib.md5((code + "\n".join(errors)).encode()).hexdigest()
-            cache_file = Path.home() / ".flutter_orchestrator_cache" / f"gemini_fix_{cache_key}.json"
-            
-            if cache_file.exists():
-                try:
-                    cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
-                    self.log.ok("🤖 Usando correção em cache (evitando rate limit)")
-                    return cache_data.get("fixed_code")
-                except Exception:
-                    pass  # Cache corrompido, ignora e continua
-
-            # Descobre URL funcional
-            url = GeminiCodeFixer._working_url(self.api_key)
-            if not url:
-                self.log.err("🤖 Nenhum modelo Gemini disponível para esta chave")
-                return None
-
-            self.log.info(f"🤖 Usando: {url.split('/models/')[1].split(':')[0]}")
-            full_url = f"{url}?key={self.api_key}"
-            payload_bytes = json.dumps(payload).encode("utf-8")
-            headers = {"Content-Type": "application/json"}
-
-            resp = None
-            for attempt, wait in enumerate((0, 15, 30, 60)):
-                if wait:
-                    self.log.warn(f"🤖 Rate limit — aguardando {wait}s (tentativa {attempt + 1}/4)...")
-                    time.sleep(wait)
-                try:
-                    req = Request(full_url, data=payload_bytes, headers=headers, method="POST")
-                    with urlopen(req, timeout=90) as r:
-                        resp = json.loads(r.read())
-                    break
-                except Exception as e:
-                    if "429" in str(e) and attempt < 3:
-                        continue
-                    raise
-
-            if resp is None:
-                self.log.err("🤖 Gemini: esgotadas tentativas após rate limit")
-                return None
+                req = Request(url, data=payload_bytes, headers=headers, method="POST")
+                with urlopen(req, timeout=90) as r:
+                    resp = json.loads(r.read())
 
                 # Extrai o texto da resposta
                 fixed_code = (resp.get("candidates", [{}])[0]
@@ -717,27 +704,26 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
                         if not l.strip().startswith("```")
                     ).strip()
 
-            # Salva no cache local
-            try:
-                cache_dir = Path.home() / ".flutter_orchestrator_cache"
-                cache_dir.mkdir(exist_ok=True)
-                cache_data = {
-                    "fixed_code": fixed_code,
-                    "timestamp": datetime.now().isoformat(),
-                    "errors": errors
-                }
-                cache_file.write_text(json.dumps(cache_data, indent=2), encoding="utf-8")
-                self.log.ok("🤖 Correção salva em cache local")
-            except Exception as e:
-                self.log.warn(f"🤖 Não foi possível salvar cache: {e}")
+                # Salva no cache local
+                try:
+                    cache_dir.mkdir(exist_ok=True)
+                    cache_data = {
+                        "fixed_code": fixed_code,
+                        "timestamp": datetime.now().isoformat(),
+                        "errors": errors
+                    }
+                    cache_file.write_text(json.dumps(cache_data, indent=2), encoding="utf-8")
+                    self.log.ok("🤖 Correção salva em cache local")
+                except Exception as e:
+                    self.log.warn(f"🤖 Não foi possível salvar cache: {e}")
 
-            self.log.ok("🤖 Gemini retornou código corrigido")
-            return fixed_code
+                self.log.ok("🤖 Gemini retornou código corrigido")
+                return fixed_code
 
             except Exception as e:
                 last_error = e
                 err_str = str(e)
-                
+
                 # Detecta erro 429 (Rate Limit Exceeded)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
                     if attempt < self.MAX_RETRIES:
@@ -753,7 +739,7 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
                     # Outro erro não relacionado a rate limit
                     self.log.err(f"🤖 Gemini API falhou: {e}")
                     return None
-        
+
         # Se chegou aqui, todas as tentativas falharam
         self.log.err(f"🤖 Gemini API falhou após {self.MAX_RETRIES} tentativas: {last_error}")
         return None
@@ -762,8 +748,8 @@ IMPORTANTE: Retorne SOMENTE o código Dart puro, começando com import ou void m
     def validate_key(api_key: str) -> tuple[bool, str]:
         """Valida a chave Gemini com uma chamada mínima."""
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-            req = Request(url, headers={"Content-Type": "application/json"})
+            url = "https://generativelanguage.googleapis.com/v1beta/models"
+            req = Request(url, headers={"Content-Type": "application/json", "x-goog-api-key": api_key})
             with urlopen(req, timeout=10) as r:
                 data = json.loads(r.read())
             models = [m.get("name", "") for m in data.get("models", [])]
@@ -2596,7 +2582,6 @@ class FlutterOrchestratorGUI(ctk.CTk):
                     pub_cache = Path.home() / ".pub-cache"
                     if pub_cache.exists():
                         try:
-                            import shutil
                             shutil.rmtree(pub_cache / "hosted" / "pub.dev" / ".cache", ignore_errors=True)
                             self.log.ok("🔧 Cache do pub limpo")
                         except Exception:
