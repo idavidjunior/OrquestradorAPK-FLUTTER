@@ -173,9 +173,17 @@ class FlutterOrchestrator:
         # Aceita licenças automaticamente
         log_info("Aceitando licenças do Android...")
         try:
-            subprocess.run([self.flutter_cmd, "--accept-licenses"], check=True)
-        except:
-            log_warning("Não foi possível aceitar licenças automaticamente. Execute manualmente: flutter doctor --android-licenses")
+            subprocess.run(
+                [self.flutter_cmd, "doctor", "--android-licenses"],
+                input="y\ny\ny\ny\ny\n",
+                text=True,
+                capture_output=True,
+                timeout=120,
+            )
+            log_info("Licenças Android aceitas.")
+        except Exception as e:
+            log_warning(f"Não foi possível aceitar licenças automaticamente ({e}). "
+                        "Execute manualmente: flutter doctor --android-licenses")
         
         return True
 
@@ -185,7 +193,9 @@ class FlutterOrchestrator:
         
         flutter_found = False
         try:
-            result = subprocess.run([self.flutter_cmd, "--version"], capture_output=True, text=True)
+            result = subprocess.run(
+                [self.flutter_cmd, "--version"],
+                capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 log_success("Flutter detectado.")
                 version_line = result.stdout.split('\n')[0]
@@ -215,7 +225,7 @@ class FlutterOrchestrator:
         # Verificação básica do Java/Android SDK
         java_found = False
         try:
-            subprocess.run(["java", "-version"], capture_output=True)
+            subprocess.run(["java", "-version"], capture_output=True, timeout=15)
             log_success("Java JDK detectado.")
             java_found = True
         except FileNotFoundError:
@@ -353,7 +363,9 @@ class FlutterOrchestrator:
         
         try:
             log_info("Executando 'flutter clean'...")
-            subprocess.run([self.flutter_cmd, "clean"], cwd=self.project_path, check=True)
+            subprocess.run(
+                [self.flutter_cmd, "clean"],
+                cwd=self.project_path, check=True, timeout=60)
             
             # Limpa pacotes obtidos para garantir integridade (opcional, mas recomendado para CI)
             log_info("Removendo pasta .packages e build...")
@@ -371,7 +383,9 @@ class FlutterOrchestrator:
         
         try:
             log_info("Executando 'flutter pub get'...")
-            subprocess.run([self.flutter_cmd, "pub", "get"], cwd=self.project_path, check=True)
+            subprocess.run(
+                [self.flutter_cmd, "pub", "get"],
+                cwd=self.project_path, check=True, timeout=300)
             log_success("Dependências resolvidas e instaladas.")
             return True
         except subprocess.CalledProcessError:
@@ -386,7 +400,9 @@ class FlutterOrchestrator:
             log_info("Executando 'flutter analyze'...")
             # Não usamos check=True estritamente aqui pois warnings não devem parar o build necessariamente,
             # mas errors sim. O flutter analyze retorna 1 se houver errors.
-            result = subprocess.run([self.flutter_cmd, "analyze"], cwd=self.project_path, capture_output=True, text=True)
+            result = subprocess.run(
+                [self.flutter_cmd, "analyze"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=120)
             
             if result.returncode != 0:
                 log_warning("Análise estática encontrou problemas:")

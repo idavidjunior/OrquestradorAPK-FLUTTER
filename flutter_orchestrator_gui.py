@@ -392,8 +392,14 @@ class KnowledgeBase:
 
             elif fix_type == "pubspec_fix":
                 # Corrige erros de sintaxe no pubspec.yaml
+                # _fix_pubspec_syntax_errors é estático em ProjectSourceManager
                 if project_dir:
-                    changed = self._fix_pubspec_syntax_errors(errors, project_dir, self.log)
+                    try:
+                        changed = ProjectSourceManager._validate_and_fix_pubspec(
+                            project_dir, self.log)
+                        changed = not changed  # retorna False quando reconstruiu
+                    except Exception as e:
+                        self.log.warn(f"🧠 pubspec_fix falhou: {e}")
 
             if changed and fix_type != "info_only":
                 applied.append(desc)

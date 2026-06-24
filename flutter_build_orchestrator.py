@@ -276,20 +276,25 @@ class FlutterBuildOrchestrator:
         """Copia o APK gerado para o diretório de output"""
         self.log("Copiando artifacts...", "STEP")
 
-        # Criar diretório de output
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Determinar caminho do APK
-        build_mode = "release"
-        apk_path = self.project_path / "build" / "app" / "outputs" / "flutter-apk" / "app.apk"
+        # Procura qualquer .apk gerado, ordenado por data (mais recente primeiro)
+        flutter_apk_dir = self.project_path / "build" / "app" / "outputs" / "flutter-apk"
+        legacy_dir      = self.project_path / "build" / "app" / "outputs" / "apk"
 
-        if not apk_path.exists():
-            # Tentar caminho alternativo
-            apk_path = self.project_path / "build" / "app" / "outputs" / "apk" / "release" / "app-release.apk"
+        candidates = []
+        for search_dir in [flutter_apk_dir, legacy_dir]:
+            if search_dir.exists():
+                candidates.extend(search_dir.rglob("*.apk"))
 
-        if not apk_path.exists():
-            self.log("APK não encontrado após build", "ERROR")
+        if not candidates:
+            self.log("APK não encontrado após build — verifique os logs acima", "ERROR")
+            self.log(f"  Diretório procurado: {flutter_apk_dir}", "ERROR")
             return None
+
+        # Mais recente primeiro
+        apk_path = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+        self.log(f"APK encontrado: {apk_path.name}", "SUCCESS")
 
         # Gerar nome do arquivo com timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
