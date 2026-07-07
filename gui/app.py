@@ -760,7 +760,7 @@ def run():
                 "zipStoreBase=GRADLE_USER_HOME\n"
                 "zipStorePath=wrapper/dists\n"
                 "distributionUrl=https\\://services.gradle.org/"
-                "distributions/gradle-8.14.0-all.zip\n",
+                "distributions/gradle-8.12-all.zip\n",
                 encoding="utf-8",
             )
 
@@ -1143,11 +1143,12 @@ def run():
                         self._custom_providers[provider]["model"] = mid
                     return mid
 
-            # Fallback: primeiro modelo da lista
-            if ordered:
-                fallback = ordered[0]
-                self._auto_selected_models[provider] = fallback
-                return fallback
+            # NENHUM modelo passou no teste de chat
+            # N\u00e3o faz fallback cego — evita 401 em runtime
+            self.log.warn(
+                f"{provider}: nenhum modelo confirmou chat — "
+                "verifique se a chave tem permiss\u00e3o de infer\u00eancia"
+            )
             return None
 
         def _validate_openai_compatible(self, key: str, provider: str,

@@ -567,7 +567,8 @@ class FlutterBuildOrchestrator:
     # ── Build ──────────────────────────────────────────────────────────
 
     def build_apk(self, release: bool = True,
-                  build_number: Optional[str] = None) -> bool:
+                  build_number: Optional[str] = None,
+                  _skip_gradle_check: bool = False) -> bool:
         mode = "release" if release else "debug"
         self.log(f"Compilando APK ({mode})...", "STEP")
         try:
@@ -576,6 +577,8 @@ class FlutterBuildOrchestrator:
                 cmd.append("--release")
             if build_number:
                 cmd.extend(["--build-number", build_number])
+            if _skip_gradle_check:
+                cmd.append("--android-skip-build-dependency-validation")
             result = subprocess.run(
                 cmd, cwd=self.project_path,
                 capture_output=True, text=True, timeout=1800
@@ -583,11 +586,24 @@ class FlutterBuildOrchestrator:
             if result.returncode == 0:
                 self.log("APK compilado com sucesso", "SUCCESS")
                 return True
-            self.log(f"Erro: {result.stderr[:500]}", "ERROR")
+            stderr = result.stderr[:2000]
+            self.log(f"Erro: {stderr[:300]}...", "ERROR")
+
+            # Auto-retry com flag de Gradle se erro for vers\u00e3o do Gradle
+            if not _skip_gradle_check and ("Gradle version" in stderr
+                                           or "gradle" in stderr.lower()):
+                self.log(
+                    "Tentando novamente com "
+                    "--android-skip-build-dependency-validation...",
+                    "INFO"
+                )
+                return self.build_apk(release, build_number,
+                                      _skip_gradle_check=True)
+
             # Tenta corre\u00e7\u00e3o via IA se configurada
             if self.api_key and self.api_provider:
                 self.log("Tentando corre\u00e7\u00e3o autom\u00e1tica via IA...", "INFO")
-                if self._fix_errors_and_retry(result.stderr, release, build_number):
+                if self._fix_errors_and_retry(stderr, release, build_number):
                     return True
             return False
         except subprocess.TimeoutExpired:
