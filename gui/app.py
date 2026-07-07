@@ -39,19 +39,38 @@ def run():
         """Janela principal do Flutter Build Orchestrator."""
 
         API_PROVIDERS = [
-            "Gemini", "OpenAI", "Anthropic", "OpenRouter",
-            "Ollama (local)", "Personalizado..."
+            "Gemini", "OpenAI", "Anthropic", "DeepSeek",
+            "Mistral AI", "Groq", "Together AI", "NVIDIA",
+            "Perplexity", "Cohere", "xAI (Grok)", "AI21 Labs",
+            "OpenRouter", "Ollama (local)", "Personalizado..."
         ]
 
         API_KEY_PATTERNS = [
             (re.compile(r"^AIza"), "Gemini"),
             (re.compile(r"^sk-ant-"), "Anthropic"),
             (re.compile(r"^sk-or-"), "OpenRouter"),
+            (re.compile(r"^gsk_"), "Groq"),
+            (re.compile(r"^tgp_"), "Together AI"),
+            (re.compile(r"^pplx-"), "Perplexity"),
+            (re.compile(r"^nvapi-"), "NVIDIA"),
+            (re.compile(r"^xai-"), "xAI (Grok)"),
             (re.compile(r"^sk-proj-"), "OpenAI"),
             (re.compile(r"^sk-"), "OpenAI"),
             (re.compile(r"^solfce-"), "OpenAI"),
             (re.compile(r"^sess-"), "OpenAI"),
         ]
+
+        OPENAI_COMPATIBLE = {
+            "DeepSeek":    ("https://api.deepseek.com/v1",          "deepseek-chat"),
+            "Mistral AI":  ("https://api.mistral.ai/v1",           "mistral-large-latest"),
+            "Groq":        ("https://api.groq.com/openai/v1",      "llama-3.3-70b-versatile"),
+            "Together AI": ("https://api.together.xyz/v1",         "mistralai/Mixtral-8x7B-Instruct-v0.1"),
+            "NVIDIA":      ("https://integrate.api.nvidia.com/v1", "meta/llama-3.1-8b-instruct"),
+            "Perplexity":  ("https://api.perplexity.ai",           "sonar-pro"),
+            "Cohere":      ("https://api.cohere.ai/v1",            "command-r-plus"),
+            "xAI (Grok)":  ("https://api.x.ai/v1",                 "grok-2-latest"),
+            "AI21 Labs":   ("https://api.ai21.com/studio/v1",      "jamba-1.5-mini"),
+        }
 
         COMMON_ADB_PATHS = [
             Path(os.environ.get("LOCALAPPDATA", "C:\\")) / "Android" / "Sdk" / "platform-tools" / "adb.exe",
@@ -649,6 +668,9 @@ def run():
                 ok, msg = self._validate_openrouter_key(self.api_key)
             elif provider == "Ollama (local)":
                 ok, msg = self._validate_ollama()
+            elif provider in self.OPENAI_COMPATIBLE:
+                url = self.OPENAI_COMPATIBLE[provider][0].rstrip("/") + "/models"
+                ok, msg = self._validate_openai_compatible(self.api_key, provider, url)
             elif provider in self._custom_providers:
                 ok, msg = self._validate_custom_provider(self.api_key)
             else:
@@ -698,6 +720,9 @@ def run():
                 ok, msg = self._validate_openrouter_key(key)
             elif provider == "Ollama (local)":
                 ok, msg = self._validate_ollama()
+            elif provider in self.OPENAI_COMPATIBLE:
+                url = self.OPENAI_COMPATIBLE[provider][0].rstrip("/") + "/models"
+                ok, msg = self._validate_openai_compatible(key, provider, url)
             elif provider in self._custom_providers:
                 ok, msg = self._validate_custom_provider(key)
             else:
@@ -717,19 +742,36 @@ def run():
                 self.log.err(f"{provider}: {msg}")
 
         def _validate_openai_key(self, key: str):
+            return self._validate_openai_compatible(key, "OpenAI",
+                "https://api.openai.com/v1/models")
+
+        def _validate_openai_compatible(self, key: str, provider: str,
+                                         base_url: str = None):
+            """Valida chave contra qualquer API compat\u00edvel com OpenAI (GET /models)."""
+            url = base_url or self.OPENAI_COMPATIBLE.get(provider, [None])[0]
+            if not url:
+                # Tenta /models no base_url
+                cfg = self.OPENAI_COMPATIBLE.get(provider)
+                if cfg:
+                    url = cfg[0].rstrip("/") + "/models"
+            if not url:
+                return False, "URL n\u00e3o configurada"
             try:
                 req = __import__("urllib.request", fromlist=["Request", "urlopen"]).Request(
-                    "https://api.openai.com/v1/models",
+                    url,
                     headers={"Authorization": f"Bearer {key}"},
                 )
                 with __import__("urllib.request").urlopen(req, timeout=10) as r:
                     data = __import__("json").loads(r.read())
-                return True, f"OK \u2014 {len(data.get('data', []))} modelos dispon\u00edveis"
+                models = data.get("data", [])
+                if models:
+                    return True, f"OK \u2014 {len(models)} modelos dispon\u00edveis"
+                return True, f"Conectado (HTTP {r.status})"
             except Exception as e:
                 err = str(e)
                 if "401" in err:
                     return False, "Chave inv\u00e1lida"
-                return False, f"Erro: {err}"
+                return False, f"Erro: {err[:100]}"
 
         def _validate_anthropic_key(self, key: str):
             try:
