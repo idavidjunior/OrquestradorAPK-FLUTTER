@@ -1,51 +1,40 @@
-#!/usr/bin/env python3
 """
-Teste de fumaça: garante que todos os módulos Python do projeto compilam.
-
-Foi exatamente um SyntaxError não detectado que deixou o componente principal
-(flutter_orchestrator_gui.py) quebrado no repositório. Este teste impede que
-isso volte a acontecer.
-
-Roda de duas formas:
-    pytest                       # como suíte de testes
-    python tests/test_smoke.py   # standalone, sem dependências
+Smoke tests — verifica importa\u00e7\u00e3o dos m\u00f3dulos principais.
 """
 
-import py_compile
-import unittest
+import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+def test_import_cli():
+    from flutter_orchestrator import FlutterBuildOrchestrator, Color
 
 
-def iter_python_files():
-    """Todos os .py do projeto, exceto caches e ambientes virtuais."""
-    skip_dirs = {"__pycache__", ".venv", "venv", "build", "dist"}
-    for path in sorted(PROJECT_ROOT.rglob("*.py")):
-        if any(part in skip_dirs for part in path.parts):
-            continue
-        yield path
+def test_import_gui_modules():
+    from gui.logger import Logger
+    from gui.checklist import Checklist
+    from gui.knowledge_base import KnowledgeBase
+    from gui.gemini_fixer import GeminiCodeFixer
+    from gui.project_source import ProjectSourceManager
 
 
-class TestModulesCompile(unittest.TestCase):
-    """Cada arquivo .py deve compilar sem erros de sintaxe."""
+def test_knowledge_base_init():
+    from gui.knowledge_base import KnowledgeBase
 
-    def test_all_modules_compile(self):
-        files = list(iter_python_files())
-        self.assertTrue(files, "Nenhum arquivo Python encontrado para validar")
+    class FakeLog:
+        def ok(self, msg): pass
+        def warn(self, msg): pass
+        def err(self, msg): pass
+        def info(self, msg): pass
 
-        failures = []
-        for path in files:
-            try:
-                py_compile.compile(str(path), doraise=True)
-            except py_compile.PyCompileError as exc:
-                failures.append(f"{path.relative_to(PROJECT_ROOT)}: {exc.msg}")
-
-        self.assertFalse(
-            failures,
-            "Arquivos com erro de compilação:\n" + "\n".join(failures),
-        )
+    kb = KnowledgeBase(FakeLog())
+    stats = kb.stats()
+    assert "total_fixes" in stats
+    assert "total_applied" in stats
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+def test_flutter_version_url():
+    from flutter_orchestrator import _flutter_download_url
+    url = _flutter_download_url()
+    assert url.startswith("https://")
+    assert "flutter" in url

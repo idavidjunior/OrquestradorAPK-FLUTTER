@@ -33,6 +33,15 @@ target/
 coverage/
 htmlcov/
 
+# Build output
+build_output/
+
+# Test cache
+.pytest_cache/
+
+# Test artifacts
+*.apk
+
 # Cache
 .mypy_cache/
 .pytest_cache/

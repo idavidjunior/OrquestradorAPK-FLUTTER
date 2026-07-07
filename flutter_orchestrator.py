@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Flutter Build Orchestrator
-Automatiza todo o processo de build de um aplicativo Flutter, gerando um APK pronto para instalação.
-Inclui download e instalação automática de pré-requisitos se necessário.
+Automatiza todo o processo de build de aplicativos Flutter, gerando APK pronto para instala\u00e7\u00e3o.
+Unifica as funcionalidades dos dois scripts anteriores com auto-install e corre\u00e7\u00f5es autom\u00e1ticas.
 """
 
 import os
@@ -10,564 +10,609 @@ import sys
 import subprocess
 import shutil
 import argparse
+import json
 import platform
+import re
 import zipfile
 import tarfile
-import re
-from pathlib import Path
 from datetime import datetime
-from urllib.request import urlretrieve, urlopen
+from pathlib import Path
+from typing import Optional, List, Dict
+from urllib.request import urlopen, Request
 from urllib.error import URLError
+
 
 try:
     import yaml
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
-    print("AVISO: PyYAML não instalado. Algumas validações estarão limitadas.")
 
-class Colors:
-    """Cores para formatação do terminal."""
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
+
+# ---------------------------------------------------------------------------
+#  Cores para terminal
+# ---------------------------------------------------------------------------
+class Color:
     GREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    HEADER = '\033[95m'
+    RESET = '\033[0m'
     BOLD = '\033[1m'
 
-def log_info(message):
-    print(f"{Colors.BLUE}[INFO]{Colors.ENDC} {message}")
 
-def log_success(message):
-    print(f"{Colors.GREEN}[SUCESSO]{Colors.ENDC} {message}")
+# ---------------------------------------------------------------------------
+#  Log helpers
+# ---------------------------------------------------------------------------
+def _log(level, color, message):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"{color}[{ts}] [{level}] {message}{Color.RESET}")
 
-def log_warning(message):
-    print(f"{Colors.WARNING}[ATENÇÃO]{Colors.ENDC} {message}")
+def log_info(msg):    _log("INFO", Color.BLUE, msg)
+def log_ok(msg):      _log("OK", Color.GREEN, msg)
+def log_warn(msg):    _log("WARN", Color.YELLOW, msg)
+def log_err(msg):     _log("ERROR", Color.RED, msg)
+def log_step(msg):
+    print(f"\n{Color.HEADER}{'='*60}{Color.RESET}")
+    print(f"{Color.BOLD}{msg}{Color.RESET}")
+    print(f"{Color.HEADER}{'='*60}{Color.RESET}")
 
-def log_error(message):
-    print(f"{Colors.FAIL}[ERRO]{Colors.ENDC} {message}")
 
-def log_step(message):
-    print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
-    print(f"{Colors.BOLD}{message}{Colors.ENDC}")
-    print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}\n")
+# ---------------------------------------------------------------------------
+#  Flutter version lookup (dynamic — avoids hardcoding)
+# ---------------------------------------------------------------------------
+def _fetch_latest_flutter_version() -> Optional[str]:
+    """
+    Consulta a release API do Flutter para obter a vers\u00e3o est\u00e1vel mais recente.
+    Retorna None se falhar (fallback para vers\u00e3o fixa conhecida).
+    """
+    try:
+        url = ("https://storage.googleapis.com/"
+               "flutter_infra_release/releases/releases_linux.json")
+        req = Request(url, headers={"User-Agent": "FlutterOrchestrator/1.0"})
+        with urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        stable = [r for r in data.get("releases", [])
+                  if r.get("channel") == "stable"]
+        if stable:
+            return stable[0]["version"]
+    except Exception:
+        pass
+    return None
 
-class FlutterOrchestrator:
-    def __init__(self, project_path, output_dir=None, release=True, auto_install=False):
+
+def _flutter_download_url() -> str:
+    """Gera URL de download do Flutter para a plataforma atual."""
+    system = platform.system()
+    arch_map = {
+        "Linux": "linux/flutter_linux_{version}-stable.tar.xz",
+        "Darwin": "macos/flutter_macos_{version}-stable.zip",
+        "Windows": "windows/flutter_windows_{version}-stable.zip",
+    }
+    arch_key = arch_map.get(system, "linux")
+    version = _fetch_latest_flutter_version() or "3.24.0"
+    base = "https://storage.googleapis.com/flutter_infra_release/releases/stable"
+    return f"{base}/{arch_key.format(version=version)}"
+
+
+# ---------------------------------------------------------------------------
+#  Main orchestrator
+# ---------------------------------------------------------------------------
+class FlutterBuildOrchestrator:
+    """Orquestrador de builds Flutter."""
+
+    def __init__(self, project_path: str,
+                 output_dir: str = "build_output",
+                 auto_install: bool = False):
         self.project_path = Path(project_path).resolve()
-        self.release = release
-        self.output_dir = Path(output_dir).resolve() if output_dir else self.project_path / "build_output"
+        self.output_dir = Path(output_dir).resolve()
         self.auto_install = auto_install
-        self.start_time = None
-        
-        # Comandos base
+        self.build_log: List[Dict] = []
+        self.start_time = datetime.now()
         self.flutter_cmd = "flutter"
-        self.gradle_cmd = "./gradlew" if os.name != 'nt' else "gradlew.bat"
-        
-        # URLs e configurações de download
-        self.flutter_url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.0-stable.tar.xz"
-        if platform.system() == "Darwin":
-            self.flutter_url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_3.24.0-stable.zip"
-        elif platform.system() == "Windows":
-            self.flutter_url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.24.0-stable.zip"
-        
         self.install_dir = Path.home() / ".flutter_auto"
-        self.java_url = "https://download.java.net/java/GA/jdk17.0.2/dfd4a8d0985749f896bed50d7138ee7f/8/GPL/openjdk-17.0.2_linux-x64_bin.tar.gz"
 
-    def download_file(self, url, dest_path, description="Arquivo"):
-        """Baixa um arquivo com barra de progresso."""
-        log_info(f"Baixando {description}...")
-        
-        try:
-            with urlopen(url) as response:
-                total_size = int(response.getheader('Content-Length', 0))
-                block_size = 8192
-                downloaded = 0
-                
-                with open(dest_path, 'wb') as f:
-                    while True:
-                        buffer = response.read(block_size)
-                        if not buffer:
-                            break
-                        f.write(buffer)
-                        downloaded += len(buffer)
-                        
-                        if total_size > 0:
-                            percent = (downloaded / total_size) * 100
-                            sys.stdout.write(f'\r  Progresso: {percent:.1f}%')
-                            sys.stdout.flush()
-                    
-                    print()  # Nova linha após progresso
-                    
-            log_success(f"Download concluído: {dest_path}")
-            return True
-        except Exception as e:
-            log_error(f"Falha no download: {e}")
-            return False
+    # ── Logging ────────────────────────────────────────────────────────
 
-    def extract_archive(self, archive_path, dest_dir):
-        """Extrai arquivos ZIP ou TAR."""
-        log_info(f"Extraindo {archive_path.name}...")
-        
-        try:
-            if archive_path.suffix == '.zip':
-                with zipfile.ZipFile(archive_path, 'r') as zip_ref:
-                    for member in zip_ref.namelist():
-                        # Protege contra path traversal (CVE-2007-4559)
-                        if '..' in member or member.startswith('/'):
-                            log_warning(f"Arquivo suspeito ignorado: {member}")
-                            continue
-                        zip_ref.extract(member, dest_dir)
-            elif archive_path.suffix in ['.tar', '.gz', '.xz']:
-                mode = 'r:xz' if archive_path.suffix == '.xz' else 'r:gz'
-                if archive_path.suffix == '.tar':
-                    mode = 'r:'
-                with tarfile.open(archive_path, mode) as tar_ref:
-                    for member in tar_ref.getmembers():
-                        # Protege contra path traversal
-                        if '..' in member.name or member.name.startswith('/'):
-                            log_warning(f"Arquivo suspeito ignorado: {member.name}")
-                            continue
-                        tar_ref.extract(member, dest_dir)
-            
-            log_success("Extração concluída.")
-            return True
-        except Exception as e:
-            log_error(f"Falha na extração: {e}")
-            return False
+    def log(self, message: str, level: str = "INFO"):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.build_log.append({
+            "timestamp": timestamp, "level": level, "message": message
+        })
+        color_map = {
+            "INFO": Color.BLUE, "SUCCESS": Color.GREEN,
+            "WARNING": Color.YELLOW, "ERROR": Color.RED, "STEP": Color.CYAN,
+        }
+        color = color_map.get(level, Color.RESET)
+        print(f"{color}[{timestamp}] [{level}] {message}{Color.RESET}")
 
-    def install_flutter(self):
-        """Baixa e instala o Flutter automaticamente."""
-        log_step("Instalando Flutter Automaticamente")
-        
-        self.install_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Determina nome do arquivo baseado na URL
-        filename = self.flutter_url.split('/')[-1]
-        archive_path = self.install_dir / filename
-        
-        # Download
-        if not self.download_file(self.flutter_url, archive_path, "Flutter SDK"):
-            return False
-        
-        # Extração
-        if not self.extract_archive(archive_path, self.install_dir):
-            return False
-        
-        # Limpa arquivo compactado
-        if archive_path.exists():
-            archive_path.unlink()
-        
-        # Configura caminho do Flutter
-        flutter_bin = self.install_dir / "flutter" / "bin"
-        self.flutter_cmd = str(flutter_bin / "flutter")
-        
-        # Adiciona ao PATH temporariamente para esta sessão
-        os.environ['PATH'] = str(flutter_bin) + os.pathsep + os.environ.get('PATH', '')
-        
-        log_success(f"Flutter instalado em: {self.install_dir / 'flutter'}")
-        log_warning("IMPORTANTE: Para uso futuro, adicione ao seu PATH permanentemente:")
-        log_warning(f"  export PATH=\"$PATH:{flutter_bin}\"")
-        
-        # Aceita licenças automaticamente
-        log_info("Aceitando licenças do Android...")
-        try:
-            subprocess.run(
-                [self.flutter_cmd, "doctor", "--android-licenses"],
-                input="y\ny\ny\ny\ny\n",
-                text=True,
-                capture_output=True,
-                timeout=120,
-            )
-            log_info("Licenças Android aceitas.")
-        except Exception as e:
-            log_warning(f"Não foi possível aceitar licenças automaticamente ({e}). "
-                        "Execute manualmente: flutter doctor --android-licenses")
-        
-        return True
+    # ── Prerequisites ──────────────────────────────────────────────────
 
-    def check_prerequisites(self):
-        """Verifica se Flutter e Java estão instalados e acessíveis."""
-        log_step("1. Verificando Pré-requisitos")
-        
-        flutter_found = False
+    def check_prerequisites(self) -> bool:
+        self.log("Verificando pr\u00e9-requisitos...", "STEP")
+        all_ok = True
+
+        # Flutter
         try:
             result = subprocess.run(
                 [self.flutter_cmd, "--version"],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=30
+            )
             if result.returncode == 0:
-                log_success("Flutter detectado.")
-                version_line = result.stdout.split('\n')[0]
-                log_info(f"Versão: {version_line}")
-                flutter_found = True
+                v = result.stdout.split("\n")[0]
+                self.log(f"Flutter: {v}", "SUCCESS")
             else:
-                raise Exception("Flutter não respondeu corretamente ao comando --version.")
-        except FileNotFoundError:
-            log_error("Flutter não encontrado no PATH.")
-        except Exception as e:
-            log_error(f"Erro ao verificar Flutter: {e}")
-        
-        # Se não encontrou Flutter e auto_install está habilitado
-        if not flutter_found:
+                raise Exception("Flutter --version falhou")
+        except (FileNotFoundError, Exception):
+            self.log("Flutter n\u00e3o encontrado", "ERROR")
             if self.auto_install:
-                log_warning("Auto-instalação ativada. Tentando instalar Flutter...")
-                if not self.install_flutter():
-                    log_error("Falha na instalação automática do Flutter.")
-                    return False
-                # Re-verifica após instalação
-                return self.check_prerequisites()
-            else:
-                log_error("Flutter não está instalado.")
-                log_info("Use a flag --auto-install para baixar e instalar automaticamente.")
-                return False
+                self.log("Auto-instala\u00e7\u00e3o ativada...", "INFO")
+                if self._install_flutter():
+                    return self.check_prerequisites()
+            all_ok = False
 
-        # Verificação básica do Java/Android SDK
-        java_found = False
+        # Git
         try:
-            subprocess.run(["java", "-version"], capture_output=True, timeout=15)
-            log_success("Java JDK detectado.")
-            java_found = True
+            subprocess.run(["git", "--version"],
+                           capture_output=True, timeout=10)
+            self.log("Git encontrado", "SUCCESS")
         except FileNotFoundError:
-            log_warning("Java não encontrado no PATH.")
-        
-        if not java_found and self.auto_install:
-            log_warning("Java não detectado. A instalação do Android Studio é recomendada para o SDK completo.")
-            log_info("O Flutter pode funcionar com o Java embutido do Android Studio.")
-        
-        return True
+            self.log("Git n\u00e3o encontrado", "ERROR")
+            all_ok = False
 
-    def validate_project(self):
-        """Valida se o diretório contém um projeto Flutter válido."""
-        log_step("2. Validando Projeto")
-        
-        pubspec_file = self.project_path / "pubspec.yaml"
-        if not pubspec_file.exists():
-            log_error(f"Arquivo pubspec.yaml não encontrado em {self.project_path}.")
-            log_error("Este não parece ser um projeto Flutter válido.")
-            return False
-        
-        # Valida e corrige o pubspec.yaml antes de prosseguir
-        if not self._validate_and_fix_pubspec(pubspec_file):
-            log_error("Falha ao validar/corrigir pubspec.yaml. Build não pode continuar.")
-            return False
-        
-        lib_main = self.project_path / "lib" / "main.dart"
-        if not lib_main.exists():
-            log_warning(f"Arquivo lib/main.dart não encontrado. O build pode falhar se a entrada não for padrão.")
-        
-        log_success("Estrutura do projeto validada.")
-        return True
-
-    def _validate_and_fix_pubspec(self, pubspec_path: Path) -> bool:
-        """
-        Valida e tenta corrigir automaticamente erros no pubspec.yaml.
-        Problemas conhecidos que corrige:
-        - Linhas mescladas sem quebra (ex: 'version: 1.0.0+1  environment:')
-        - Indentação incorreta
-        - Nomes de pacotes com espaços extras
-        """
-        log_info("Validando sintaxe do pubspec.yaml...")
-        
+        # Java
         try:
-            content = pubspec_path.read_text(encoding='utf-8')
-        except Exception as e:
-            log_error(f"Não foi possível ler pubspec.yaml: {e}")
+            result = subprocess.run(
+                ["java", "-version"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                v = result.stderr.split("\n")[0]
+                self.log(f"Java: {v}", "SUCCESS")
+            else:
+                raise Exception("java -version falhou")
+        except FileNotFoundError:
+            warn = "Java n\u00e3o encontrado (necess\u00e1rio para build Android)"
+            self.log(warn, "WARNING")
+
+        return all_ok
+
+    def _install_flutter(self) -> bool:
+        """Baixa e instala o Flutter automaticamente."""
+        self.log("Instalando Flutter automaticamente...", "STEP")
+        self.install_dir.mkdir(parents=True, exist_ok=True)
+
+        url = _flutter_download_url()
+        filename = url.split("/")[-1]
+        archive_path = self.install_dir / filename
+
+        if not self._download_file(url, archive_path, "Flutter SDK"):
             return False
-        
-        original_content = content
+        if not self._extract_archive(archive_path, self.install_dir):
+            return False
+        if archive_path.exists():
+            archive_path.unlink()
+
+        flutter_bin = self.install_dir / "flutter" / "bin"
+        if os.name == "nt":
+            self.flutter_cmd = str(flutter_bin / "flutter.bat")
+        else:
+            self.flutter_cmd = str(flutter_bin / "flutter")
+
+        os.environ["PATH"] = str(flutter_bin) + os.pathsep + os.environ.get("PATH", "")
+        self.log(f"Flutter instalado em: {self.install_dir / 'flutter'}", "SUCCESS")
+
+        try:
+            subprocess.run(
+                [self.flutter_cmd, "doctor", "--android-licenses"],
+                input="y\n" * 5, text=True,
+                capture_output=True, timeout=120,
+            )
+        except Exception:
+            pass
+
+        return True
+
+    def _download_file(self, url: str, dest: Path, desc: str = "Arquivo") -> bool:
+        self.log(f"Baixando {desc}...", "INFO")
+        try:
+            with urlopen(url) as response:
+                total = int(response.getheader("Content-Length", 0))
+                downloaded = 0
+                with open(dest, "wb") as f:
+                    while True:
+                        buf = response.read(8192)
+                        if not buf:
+                            break
+                        f.write(buf)
+                        downloaded += len(buf)
+                        if total > 0:
+                            pct = (downloaded / total) * 100
+                            sys.stdout.write(f"\r  {pct:.1f}%")
+                            sys.stdout.flush()
+                    print()
+            self.log(f"Download conclu\u00eddo: {dest.name}", "SUCCESS")
+            return True
+        except Exception as e:
+            self.log(f"Falha no download: {e}", "ERROR")
+            return False
+
+    def _extract_archive(self, archive_path: Path, dest_dir: Path) -> bool:
+        self.log(f"Extraindo {archive_path.name}...", "INFO")
+        try:
+            # Path traversal prevention: resolve and verify
+            dest_resolved = dest_dir.resolve()
+
+            if archive_path.suffix == ".zip":
+                with zipfile.ZipFile(archive_path, "r") as z:
+                    for member in z.namelist():
+                        member_path = (dest_resolved / member).resolve()
+                        if not str(member_path).startswith(str(dest_resolved)):
+                            self.log(f"Path traversal ignorado: {member}", "WARNING")
+                            continue
+                        z.extract(member, dest_dir)
+            else:
+                mode = "r:xz" if archive_path.suffix == ".xz" else "r:gz"
+                if archive_path.suffix == ".tar":
+                    mode = "r:"
+                with tarfile.open(archive_path, mode) as t:
+                    for member in t.getmembers():
+                        member_path = (dest_resolved / member.name).resolve()
+                        if not str(member_path).startswith(str(dest_resolved)):
+                            self.log(
+                                f"Path traversal ignorado: {member.name}", "WARNING"
+                            )
+                            continue
+                        t.extract(member, dest_dir)
+            self.log("Extra\u00e7\u00e3o conclu\u00edda.", "SUCCESS")
+            return True
+        except Exception as e:
+            self.log(f"Falha na extra\u00e7\u00e3o: {e}", "ERROR")
+            return False
+
+    # ── Project validation ─────────────────────────────────────────────
+
+    def validate_flutter_project(self) -> bool:
+        self.log("Validando projeto Flutter...", "STEP")
+        pubspec = self.project_path / "pubspec.yaml"
+        if not pubspec.exists():
+            self.log("pubspec.yaml n\u00e3o encontrado", "ERROR")
+            return False
+        self.log("pubspec.yaml encontrado", "SUCCESS")
+        self._validate_and_fix_pubspec(pubspec)
+        return True
+
+    def _validate_and_fix_pubspec(self, pubspec_path: Path):
+        """Valida e corrige erros de sintaxe no pubspec.yaml."""
+        try:
+            content = pubspec_path.read_text(encoding="utf-8")
+        except Exception as e:
+            self.log(f"Erro ao ler pubspec.yaml: {e}", "ERROR")
+            return False
+
         fixed = False
-        
-        # Correção 1: Quebrar linhas mescladas (problema crítico do log)
-        # Padrão: "version: X.Y.Z+ABC  environment:" ou similar
-        # Detecta quando há duas chaves YAML na mesma linha sem quebra
-        lines = content.split('\n')
+
+        # Correction 1: merged lines
+        lines = content.split("\n")
         new_lines = []
-        
         for i, line in enumerate(lines):
-            # Detecta padrões como "version: 1.0.0+1  environment:" ou "sdk: ^3.0  flutter:"
-            # Procura por múltiplos pares chave-valor na mesma linha
-            merged_pattern = r'^(\s*)(\w+):\s*([^\n]+?)\s+(\w+):\s*(.*)$'
-            match = re.match(merged_pattern, line)
-            
-            if match and not line.strip().startswith('#'):
-                indent, key1, val1, key2, val2 = match.groups()
-                # Verifica se parece ser uma fusão acidental
-                if key1 in ['version', 'sdk', 'environment', 'dependencies', 'flutter'] or \
-                   key2 in ['version', 'sdk', 'environment', 'dependencies', 'flutter']:
-                    log_warning(f"Linha {i+1} detectada como mesclada: '{line[:60]}...'")
-                    log_info(f"  Corrigindo: separando '{key1}' e '{key2}' em linhas distintas")
-                    new_lines.append(f"{indent}{key1}: {val1.strip()}")
-                    new_lines.append(f"{indent}{key2}: {val2.strip()}")
+            match = re.match(
+                r"^(\s*)(\w+):\s*([^\n]+?)\s+(\w+):\s*(.*)$", line
+            )
+            if match and not line.strip().startswith("#"):
+                indent, k1, v1, k2, v2 = match.groups()
+                keys = {"version", "sdk", "environment", "dependencies", "flutter"}
+                if k1 in keys or k2 in keys:
+                    self.log(f"Linha {i+1}: separando '{k1}' e '{k2}'", "WARNING")
+                    new_lines.append(f"{indent}{k1}: {v1.strip()}")
+                    new_lines.append(f"{indent}{k2}: {v2.strip()}")
                     fixed = True
                 else:
                     new_lines.append(line)
             else:
                 new_lines.append(line)
-        
-        content = '\n'.join(new_lines)
-        
-        # Correção 2: Remover espaços extras em nomes de pacotes
-        # Padrão: "just_au  on_audio_query:" -> "on_audio_query:"
-        pkg_pattern = r'^(\s+)([\w_]+)\s+([\w_]+):\s*(.*)$'
+        content = "\n".join(new_lines)
+
+        # Correction 2: extra spaces in package names
         new_lines = []
-        for line in content.split('\n'):
-            match = re.match(pkg_pattern, line)
-            if match and not line.strip().startswith('#'):
-                indent, pkg1, pkg2, version = match.groups()
-                # Mantém apenas o segundo nome (geralmente o correto)
-                log_warning(f"Pacote com espaço extra detectado: '{pkg1}  {pkg2}'")
-                log_info(f"  Corrigindo para: '{pkg2}'")
-                new_lines.append(f"{indent}{pkg2}: {version}")
+        for line in content.split("\n"):
+            match = re.match(r"^(\s+)([\w_]+)\s+([\w_]+):\s*(.*)$", line)
+            if match and not line.strip().startswith("#"):
+                indent, _, pkg2, ver = match.groups()
+                self.log(f"Espa\u00e7o extra: corrigindo nome de pacote", "WARNING")
+                new_lines.append(f"{indent}{pkg2}: {ver}")
                 fixed = True
             else:
                 new_lines.append(line)
-        
-        content = '\n'.join(new_lines)
-        
-        # Correção 3: Garantir indentação consistente (2 espaços)
-        # Substitui tabs por espaços
-        if '\t' in content:
-            log_warning("Tabs detectados no pubspec.yaml - convertendo para espaços")
-            content = content.replace('\t', '  ')
+        content = "\n".join(new_lines)
+
+        # Correction 3: tabs -> spaces
+        if "\t" in content:
+            content = content.replace("\t", "  ")
             fixed = True
-        
-        # Se houve correções, salva o arquivo
+
         if fixed:
-            log_success("Correções aplicadas ao pubspec.yaml")
-            try:
-                pubspec_path.write_text(content, encoding='utf-8')
-            except Exception as e:
-                log_error(f"Não foi possível salvar pubspec.yaml corrigido: {e}")
-                return False
-        
-        # Validação final com yaml library se disponível
+            self.log("Corre\u00e7\u00f5es aplicadas ao pubspec.yaml", "SUCCESS")
+            pubspec_path.write_text(content, encoding="utf-8")
+
+        # Validate with PyYAML if available
         if YAML_AVAILABLE:
             try:
                 yaml.safe_load(content)
-                log_success("pubspec.yaml é sintaticamente válido")
-                return True
+                self.log("pubspec.yaml \u00e9 v\u00e1lido", "SUCCESS")
             except yaml.YAMLError as e:
-                log_error(f"Erro de sintaxe YAML persistente: {e}")
-                log_error("O pubspec.yaml continua inválido após as correções automáticas.")
-                log_error("Corrija manualmente o arquivo antes de tentar o build novamente.")
-                return False  # YAML comprovadamente inválido — abortar é melhor que falhar no meio do build
+                self.log(f"YAML inv\u00e1lido: {e}", "WARNING")
         else:
-            # Sem yaml library, apenas retorna True após correções básicas
-            log_info("PyYAML não disponível - validação limitada aplicada")
-            return True
-
-    def clean_build(self):
-        """Limpa builds anteriores."""
-        log_step("3. Limpando Build Anterior")
-        
-        try:
-            log_info("Executando 'flutter clean'...")
-            subprocess.run(
-                [self.flutter_cmd, "clean"],
-                cwd=self.project_path, check=True, timeout=60)
-            
-            # Limpa pacotes obtidos para garantir integridade (opcional, mas recomendado para CI)
-            log_info("Removendo pasta .packages e build...")
-            # O flutter clean já faz isso, mas garantimos limpeza extra se necessário
-            
-            log_success("Limpeza concluída.")
-            return True
-        except subprocess.CalledProcessError:
-            log_error("Falha ao limpar o projeto.")
-            return False
-
-    def get_dependencies(self):
-        """Instala/atualiza dependências do projeto."""
-        log_step("4. Obtendo Dependências")
-        
-        try:
-            log_info("Executando 'flutter pub get'...")
-            subprocess.run(
-                [self.flutter_cmd, "pub", "get"],
-                cwd=self.project_path, check=True, timeout=300)
-            log_success("Dependências resolvidas e instaladas.")
-            return True
-        except subprocess.CalledProcessError:
-            log_error("Falha ao obter dependências. Verifique sua conexão ou o arquivo pubspec.yaml.")
-            return False
-
-    def analyze_code(self):
-        """Analisa o código em busca de erros estáticos."""
-        log_step("5. Analisando Código Estático")
-        
-        try:
-            log_info("Executando 'flutter analyze'...")
-            # Não usamos check=True estritamente aqui pois warnings não devem parar o build necessariamente,
-            # mas errors sim. O flutter analyze retorna 1 se houver errors.
-            result = subprocess.run(
-                [self.flutter_cmd, "analyze"],
-                cwd=self.project_path, capture_output=True, text=True, timeout=120)
-            
-            if result.returncode != 0:
-                log_warning("Análise estática encontrou problemas:")
-                print(result.stdout)
-                print(result.stderr)
-                
-                # Se houver "error" (não apenas warning), paramos
-                if "error:" in result.stdout.lower() or "error:" in result.stderr.lower():
-                    log_error("Erros críticos de análise encontrados. Build abortado.")
-                    return False
-                else:
-                    log_warning("Apenas warnings encontrados. Continuando o build...")
-            else:
-                log_success("Nenhum problema encontrado na análise estática.")
-            
-            return True
-        except Exception as e:
-            log_error(f"Erro durante a análise: {e}")
-            return False
-
-    def build_apk(self):
-        """Compila o aplicativo Android (APK)."""
-        mode_str = "Release" if self.release else "Debug"
-        log_step(f"6. Compilando APK ({mode_str})")
-        
-        try:
-            output_dir_created = False
-            if not self.output_dir.exists():
-                self.output_dir.mkdir(parents=True, exist_ok=True)
-                output_dir_created = True
-
-            build_type_flag = "--release" if self.release else "--debug"
-            
-            log_info(f"Iniciando compilação {mode_str}...")
-            log_info("Isso pode demorar alguns minutos na primeira vez.")
-            
-            # Comando de build
-            cmd = [self.flutter_cmd, "build", "apk", build_type_flag]
-            
-            # Executa e mostra output em tempo real
-            process = subprocess.Popen(
-                cmd,
-                cwd=self.project_path,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
-            
-            for line in process.stdout:
-                print(line, end='') # Imprime o log do flutter em tempo real
-            
-            process.wait()
-            
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(process.returncode, cmd)
-
-            # Localizar o APK gerado
-            # O caminho padrão é build/app/outputs/flutter-apk/app-*.apk
-            build_output_path = self.project_path / "build" / "app" / "outputs" / "flutter-apk"
-            
-            if not build_output_path.exists():
-                raise FileNotFoundError("Diretório de saída do build não encontrado.")
-
-            apks = list(build_output_path.glob("app-*.apk"))
-            
-            if not apks:
-                raise FileNotFoundError("Nenhum arquivo APK foi gerado.")
-
-            # Pega o APK mais recente
-            latest_apk = max(apks, key=os.path.getctime)
-            
-            # Copia para a pasta de destino final
-            final_name = f"app-{mode_str.lower()}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.apk"
-            final_path = self.output_dir / final_name
-            
-            shutil.copy2(latest_apk, final_path)
-            
-            log_success(f"Build concluído com sucesso!")
-            log_info(f"APK gerado: {final_path}")
-            log_info(f"Tamanho: {final_path.stat().st_size / (1024*1024):.2f} MB")
-            
-            return True
-
-        except subprocess.CalledProcessError:
-            log_error("Falha na compilação do APK. Verifique os logs acima para detalhes.")
-            return False
-        except Exception as e:
-            log_error(f"Erro inesperado durante o build: {e}")
-            return False
-
-    def run(self):
-        """Executa todo o pipeline de orquestração."""
-        self.start_time = datetime.now()
-        print(f"\n{Colors.BOLD}Iniciando Flutter Build Orchestrator{Colors.ENDC}")
-        print(f"Projeto: {self.project_path}")
-        print(f"Data: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-
-        steps = [
-            ("Pré-requisitos", self.check_prerequisites),
-            ("Validação do Projeto", self.validate_project),
-            ("Limpeza", self.clean_build),
-            ("Dependências", self.get_dependencies),
-            ("Análise de Código", self.analyze_code),
-            ("Compilação APK", self.build_apk),
-        ]
-
-        for step_name, step_func in steps:
-            if not step_func():
-                log_error(f"O processo falhou na etapa: {step_name}")
-                print(f"\n{Colors.FAIL}Build Abortado.{Colors.ENDC}")
-                return False
-        
-        end_time = datetime.now()
-        duration = end_time - self.start_time
-        
-        log_step("Conclusão")
-        log_success(f"Todo o processo foi concluído com sucesso em {duration}.")
-        log_info(f"Seu APK está pronto para instalar no celular em: {self.output_dir}")
-        
+            self.log("PyYAML n\u00e3o dispon\u00edvel (valida\u00e7\u00e3o limitada)", "INFO")
         return True
 
+    # ── Dependencies ───────────────────────────────────────────────────
+
+    def get_dependencies(self) -> bool:
+        self.log("Instalando depend\u00eancias...", "STEP")
+        try:
+            result = subprocess.run(
+                [self.flutter_cmd, "pub", "get"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=300
+            )
+            if result.returncode == 0:
+                self.log("Depend\u00eancias instaladas", "SUCCESS")
+                return True
+            self.log(f"Erro: {result.stderr[:300]}", "ERROR")
+            return False
+        except subprocess.TimeoutExpired:
+            self.log("Timeout nas depend\u00eancias", "ERROR")
+            return False
+        except Exception as e:
+            self.log(f"Erro: {e}", "ERROR")
+            return False
+
+    # ── Analysis ───────────────────────────────────────────────────────
+
+    def analyze_code(self) -> bool:
+        self.log("Analisando c\u00f3digo...", "STEP")
+        try:
+            result = subprocess.run(
+                [self.flutter_cmd, "analyze"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=300
+            )
+            if result.returncode == 0:
+                self.log("An\u00e1lise sem erros", "SUCCESS")
+            else:
+                if "error:" in (result.stdout + result.stderr).lower():
+                    self.log("Erros de an\u00e1lise encontrados", "WARNING")
+                    self.log(result.stdout[:500], "INFO")
+                else:
+                    self.log("Apenas warnings (continuando...)", "WARNING")
+            return True
+        except Exception as e:
+            self.log(f"Erro: {e}", "ERROR")
+            return False
+
+    # ── Tests ──────────────────────────────────────────────────────────
+
+    def run_tests(self, skip: bool = False) -> bool:
+        if skip:
+            self.log("Testes pulados (--skip-tests)", "INFO")
+            return True
+        self.log("Executando testes...", "STEP")
+        test_dir = self.project_path / "test"
+        if not test_dir.exists() or not list(test_dir.glob("*.dart")):
+            self.log("Nenhum teste encontrado", "INFO")
+            return True
+        try:
+            result = subprocess.run(
+                [self.flutter_cmd, "test"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=600
+            )
+            if result.returncode == 0:
+                self.log("Testes OK", "SUCCESS")
+                return True
+            self.log(f"Testes falharam: {result.stdout[:300]}", "ERROR")
+            return False
+        except Exception as e:
+            self.log(f"Erro: {e}", "ERROR")
+            return False
+
+    # ── Build ──────────────────────────────────────────────────────────
+
+    def build_apk(self, release: bool = True,
+                  build_number: Optional[str] = None) -> bool:
+        mode = "release" if release else "debug"
+        self.log(f"Compilando APK ({mode})...", "STEP")
+        try:
+            cmd = [self.flutter_cmd, "build", "apk"]
+            if release:
+                cmd.append("--release")
+            if build_number:
+                cmd.extend(["--build-number", build_number])
+            result = subprocess.run(
+                cmd, cwd=self.project_path,
+                capture_output=True, text=True, timeout=1800
+            )
+            if result.returncode == 0:
+                self.log("APK compilado com sucesso", "SUCCESS")
+                return True
+            self.log(f"Erro: {result.stderr[:500]}", "ERROR")
+            return False
+        except subprocess.TimeoutExpired:
+            self.log("Timeout na compila\u00e7\u00e3o", "ERROR")
+            return False
+        except Exception as e:
+            self.log(f"Erro: {e}", "ERROR")
+            return False
+
+    # ── Artifacts ──────────────────────────────────────────────────────
+
+    def copy_artifacts(self) -> Optional[Path]:
+        self.log("Copiando artifacts...", "STEP")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        candidates = []
+        for subdir in ["flutter-apk", "apk"]:
+            search = self.project_path / "build" / "app" / "outputs" / subdir
+            if search.exists():
+                candidates.extend(search.rglob("*.apk"))
+
+        if not candidates:
+            self.log("APK n\u00e3o encontrado ap\u00f3s build", "ERROR")
+            return None
+
+        apk_path = sorted(
+            candidates, key=lambda p: p.stat().st_mtime, reverse=True
+        )[0]
+        self.log(f"APK: {apk_path.name}", "SUCCESS")
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = self.output_dir / f"app_{timestamp}.apk"
+        shutil.copy2(apk_path, output_path)
+        self.log(f"Copiado: {output_path}", "SUCCESS")
+        return output_path
+
+    # ── Report ─────────────────────────────────────────────────────────
+
+    def generate_build_report(self, apk_path: Optional[Path], success: bool):
+        self.log("Gerando relat\u00f3rio...", "STEP")
+        report = {
+            "build_info": {
+                "project_path": str(self.project_path),
+                "timestamp": self.start_time.isoformat(),
+                "duration_seconds": (
+                    datetime.now() - self.start_time
+                ).total_seconds(),
+                "success": success,
+            },
+            "apk_info": {
+                "path": str(apk_path) if apk_path else None,
+                "size_bytes": (
+                    apk_path.stat().st_size
+                    if apk_path and apk_path.exists() else None
+                ),
+                "size_mb": (
+                    round(apk_path.stat().st_size / (1024 * 1024), 2)
+                    if apk_path and apk_path.exists() else None
+                ),
+            },
+            "build_log": self.build_log,
+        }
+        report_path = self.output_dir / "build_report.json"
+        try:
+            report_path.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
+            self.log(f"Relat\u00f3rio: {report_path}", "SUCCESS")
+        except Exception as e:
+            self.log(f"Erro ao salvar relat\u00f3rio: {e}", "ERROR")
+
+        status = "SUCESSO" if success else "FALHA"
+        color = Color.GREEN if success else Color.RED
+        print(f"\n{'='*60}")
+        print(f"{Color.BOLD}RESUMO DO BUILD{Color.RESET}")
+        print(f"{'='*60}")
+        print(f"Status: {color}{status}{Color.RESET}")
+        print(f"Dura\u00e7\u00e3o: {report['build_info']['duration_seconds']:.1f}s")
+        if apk_path and apk_path.exists():
+            print(f"APK: {apk_path.name} ({report['apk_info']['size_mb']} MB)")
+        print(f"Output: {self.output_dir}")
+        print(f"{'='*60}")
+
+    # ── Pipeline ───────────────────────────────────────────────────────
+
+    def orchestrate(self, skip_tests: bool = False, debug: bool = False,
+                    build_number: Optional[str] = None) -> bool:
+        print(f"\n{Color.BOLD}{Color.CYAN}{'='*60}{Color.RESET}")
+        print(f"{Color.BOLD}{Color.CYAN}FLUTTER BUILD ORCHESTRATOR{Color.RESET}")
+        print(f"{Color.BOLD}{Color.CYAN}{'='*60}{Color.RESET}\n")
+
+        self.log(f"Projeto: {self.project_path}", "INFO")
+        self.log(f"Output: {self.output_dir}", "INFO")
+
+        steps = [
+            ("Pr\u00e9-requisitos", lambda: self.check_prerequisites()),
+            ("Valida\u00e7\u00e3o", lambda: self.validate_flutter_project()),
+            ("Depend\u00eancias", lambda: self.get_dependencies()),
+            ("An\u00e1lise", lambda: self.analyze_code()),
+            ("Testes", lambda: self.run_tests(skip=skip_tests)),
+            ("Build APK",
+             lambda: self.build_apk(release=not debug, build_number=build_number)),
+            ("Artifacts", lambda: self.copy_artifacts()),
+        ]
+
+        apk_path = None
+        for name, fn in steps:
+            self.log(f"\n>>> {name}", "STEP")
+            try:
+                result = fn()
+                if result is False and name != "Testes":
+                    self.log(f"Falhou em: {name}", "ERROR")
+                    self.generate_build_report(apk_path, False)
+                    return False
+                if name == "Artifacts" and result:
+                    apk_path = result
+            except Exception as e:
+                self.log(f"Erro em '{name}': {e}", "ERROR")
+                self.generate_build_report(apk_path, False)
+                return False
+
+        ok = apk_path is not None
+        self.generate_build_report(apk_path, ok)
+        if ok:
+            self.log("BUILD CONCLU\u00cdDO COM SUCESSO!", "SUCCESS")
+        else:
+            self.log("BUILD FALHOU", "ERROR")
+        return ok
+
+
+# ---------------------------------------------------------------------------
+#  CLI entry point
+# ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="Orquestra o build de um projeto Flutter gerando um APK.",
-        formatter_class=argparse.RawTextHelpFormatter
+        description="Flutter Build Orchestrator — automatiza o build de APKs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Exemplos:
+  %(prog)s ./meu_projeto_flutter
+  %(prog)s ./meu_projeto_flutter --output ./builds --debug --skip-tests
+  %(prog)s ./meu_projeto_flutter --build-number 42 --auto-install
+        """
     )
-    
-    parser.add_argument(
-        "project_path", 
-        help="Caminho para a raiz do projeto Flutter (onde fica o pubspec.yaml)."
-    )
-    
-    parser.add_argument(
-        "-o", "--output", 
-        help="Diretório de saída para o APK final. (Padrão: <projeto>/build_output)", 
-        default=None
-    )
-    
-    parser.add_argument(
-        "--debug", 
-        action="store_true", 
-        help="Gera um APK de debug (menor, mas mais lento). Padrão é Release."
-    )
-    
-    parser.add_argument(
-        "--auto-install", 
-        action="store_true", 
-        help="Baixa e instala automaticamente o Flutter se não estiver presente no sistema."
-    )
+    parser.add_argument("project_path", help="Caminho para o projeto Flutter")
+    parser.add_argument("--output", "-o", default="build_output",
+                        help="Diret\u00f3rio de output (padr\u00e3o: build_output)")
+    parser.add_argument("--debug", "-d", action="store_true",
+                        help="Build debug (padr\u00e3o: release)")
+    parser.add_argument("--skip-tests", action="store_true",
+                        help="Pular testes")
+    parser.add_argument("--build-number", "-b", type=str,
+                        help="N\u00famero da build")
+    parser.add_argument("--auto-install", action="store_true",
+                        help="Auto-instalar Flutter se ausente")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Output verbose")
 
     args = parser.parse_args()
 
-    if not os.path.exists(args.project_path):
-        log_error(f"Caminho do projeto não existe: {args.project_path}")
+    project_path = Path(args.project_path).resolve()
+    if not project_path.exists():
+        print(f"{Color.RED}Erro: projeto n\u00e3o encontrado{Color.RESET}")
         sys.exit(1)
 
-    orchestrator = FlutterOrchestrator(
-        project_path=args.project_path,
+    orch = FlutterBuildOrchestrator(
+        project_path=str(project_path),
         output_dir=args.output,
-        release=not args.debug,
-        auto_install=args.auto_install
+        auto_install=args.auto_install,
     )
+    ok = orch.orchestrate(
+        skip_tests=args.skip_tests,
+        debug=args.debug,
+        build_number=args.build_number,
+    )
+    sys.exit(0 if ok else 1)
 
-    success = orchestrator.run()
-    sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,11 @@
 # GUI (flutter_orchestrator_gui.py)
 customtkinter>=5.2.0
 
-# Validação de pubspec.yaml nas CLIs (flutter_orchestrator.py).
-# Opcional: sem ele, a validação de YAML fica limitada, mas o programa roda.
+# Validação de pubspec.yaml (opcional, fallback gracioso)
 PyYAML>=6.0
+
+# Testes
+pytest>=7.0
+
+# Lint
+ruff>=0.1.0
