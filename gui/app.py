@@ -13,11 +13,13 @@ Features:
 customtkinter \u00e9 lazy (importado apenas dentro de run()).
 """
 
+import json
 import os
 import re
 import subprocess
 import threading
 import tempfile
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -757,12 +759,12 @@ def run():
             if not url:
                 return False, "URL n\u00e3o configurada"
             try:
-                req = __import__("urllib.request", fromlist=["Request", "urlopen"]).Request(
+                req = urllib.request.Request(
                     url,
                     headers={"Authorization": f"Bearer {key}"},
                 )
-                with __import__("urllib.request").urlopen(req, timeout=10) as r:
-                    data = __import__("json").loads(r.read())
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = json.loads(r.read())
                 models = data.get("data", [])
                 if models:
                     return True, f"OK \u2014 {len(models)} modelos dispon\u00edveis"
@@ -775,9 +777,9 @@ def run():
 
         def _validate_anthropic_key(self, key: str):
             try:
-                req = __import__("urllib.request", fromlist=["Request"]).Request(
+                req = urllib.request.Request(
                     "https://api.anthropic.com/v1/messages",
-                    data=__import__("json").dumps(
+                    data=json.dumps(
                         {"model": "claude-3-haiku-20240307",
                          "max_tokens": 10,
                          "messages": [{"role": "user", "content": "hi"}]}
@@ -789,37 +791,37 @@ def run():
                     },
                     method="POST",
                 )
-                with __import__("urllib.request").urlopen(req, timeout=15) as r:
+                with urllib.request.urlopen(req, timeout=15) as r:
                     return True, "Chave v\u00e1lida"
-            except Exception as e:
-                err = str(e)
-                if "401" in err or "invalid" in err.lower():
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
                     return False, "Chave inv\u00e1lida"
-                if "403" in err:
+                if e.code == 403:
                     return False, "Sem permiss\u00e3o"
-                return False, f"Erro: {err}"
+                return False, f"HTTP {e.code}: {e.reason[:100]}"
+            except Exception as e:
+                return False, f"Erro: {str(e)[:100]}"
 
         def _validate_openrouter_key(self, key: str):
             try:
-                req = __import__("urllib.request", fromlist=["Request"]).Request(
+                req = urllib.request.Request(
                     "https://openrouter.ai/api/v1/auth/key",
                     headers={"Authorization": f"Bearer {key}"},
                 )
-                with __import__("urllib.request").urlopen(req, timeout=10) as r:
+                with urllib.request.urlopen(req, timeout=10) as r:
                     return True, "Chave v\u00e1lida"
-            except Exception as e:
-                err = str(e)
-                if "401" in err:
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
                     return False, "Chave inv\u00e1lida"
-                return False, f"Erro: {err}"
+                return False, f"HTTP {e.code}: {e.reason[:100]}"
+            except Exception as e:
+                return False, f"Erro: {str(e)[:100]}"
 
         def _validate_ollama(self):
             try:
-                req = __import__("urllib.request", fromlist=["Request"]).Request(
-                    "http://localhost:11434/api/tags"
-                )
-                with __import__("urllib.request").urlopen(req, timeout=5) as r:
-                    data = __import__("json").loads(r.read())
+                req = urllib.request.Request("http://localhost:11434/api/tags")
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    data = json.loads(r.read())
                 models = data.get("models", [])
                 if models:
                     return True, f"OK \u2014 {len(models)} modelos dispon\u00edveis"
@@ -834,10 +836,8 @@ def run():
             url = cfg["url"]
             try:
                 hdr = {cfg["auth_header"]: f"{cfg['auth_prefix']}{key}"}
-                req = __import__("urllib.request", fromlist=["Request"]).Request(
-                    url, headers=hdr, method="GET"
-                )
-                with __import__("urllib.request").urlopen(req, timeout=15) as r:
+                req = urllib.request.Request(url, headers=hdr, method="GET")
+                with urllib.request.urlopen(req, timeout=15) as r:
                     return True, f"Conectado (HTTP {r.status})"
             except Exception as e:
                 err = str(e)
