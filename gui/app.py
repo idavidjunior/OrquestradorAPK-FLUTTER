@@ -106,6 +106,8 @@ def run():
             self.api_key = ""
             self._custom_providers = {}
             self._auto_validate_after_id = None
+            self._auto_selected_models = {}
+            self._ollama_models_cache = []
 
             self._build_ui()
             self._start_adb_poll()
@@ -529,7 +531,7 @@ def run():
                 encoding="utf-8",
             )
 
-            # ── AndroidManifest.xml ──────────────────────────────────
+            # ── AndroidManifest.xml (v2 embedding obrigat\u00f3rio) ─────
             manifest = (
                 project_dir / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
             )
@@ -544,12 +546,28 @@ def run():
                 '        android:icon="@mipmap/ic_launcher">\n'
                 '        <activity\n'
                 '            android:name=".MainActivity"\n'
-                '            android:exported="true">\n'
+                '            android:exported="true"\n'
+                '            android:launchMode="singleTop"\n'
+                '            android:taskAffinity=""\n'
+                '            android:theme="@android:style/Theme.Light.NoTitleBar"\n'
+                '            android:configChanges="orientation|keyboardHidden|'
+                'keyboard|screenSize|smallestScreenSize|locale|layoutDirection|'
+                'fontScale|screenLayout|density|uiMode"\n'
+                '            android:hardwareAccelerated="true"\n'
+                '            android:windowSoftInputMode="adjustResize">\n'
+                '            <meta-data\n'
+                '                android:name="io.flutter.embedding.android.'
+                'NormalTheme"\n'
+                '                android:resource="@style/NormalTheme"/>\n'
                 '            <intent-filter>\n'
                 '                <action android:name="android.intent.action.MAIN"/>\n'
-                '                <category android:name="android.intent.category.LAUNCHER"/>\n'
+                '                <category android:name="android.intent.category.'
+                'LAUNCHER"/>\n'
                 '            </intent-filter>\n'
                 '        </activity>\n'
+                '        <meta-data\n'
+                '            android:name="flutterEmbedding"\n'
+                '            android:value="2"/>\n'
                 '    </application>\n'
                 '</manifest>\n',
                 encoding="utf-8",
@@ -871,12 +889,69 @@ def run():
             return self._validate_openai_compatible(key, "OpenAI",
                 "https://api.openai.com/v1/models")
 
+        def _find_working_model(self, provider: str, key: str,
+                                 models: list) -> Optional[str]:
+            """Testa cada modelo via chat completions at\u00e9 achar um que funcione."""
+            base_url = self.OPENAI_COMPATIBLE.get(provider, [None])[0]
+            if not base_url:
+                base_url = self._custom_providers.get(provider, {}).get("url", "")
+            base_url = base_url.rstrip("/")
+
+            # Filtra modelos que parecem ser de chat (n\u00e3o embedding/tts/whisper)
+            chat_keywords = ["gpt", "claude", "gemini", "llama", "mistral", "mixtral",
+                             "command", "jamba", "grok", "sonar", "deepseek",
+                             "qwen", "phi", "nemotron", "dbrx", "yi", "chat"]
+            skip_keywords = ["embedding", "tts", "whisper", "davinci", "babbage",
+                             "curie", "ada", "moderation", "similarity"]
+
+            candidates = []
+            for m in models:
+                mid = m.get("id", "") if isinstance(m, dict) else str(m)
+                mid_lower = mid.lower()
+                # Pula modelos que s\u00e3o claramente n\u00e3o-chat
+                if any(s in mid_lower for s in skip_keywords):
+                    continue
+                # D\u00e1 prefer\u00eancia a modelos com palavras-chave de chat
+                if any(k in mid_lower for k in chat_keywords):
+                    candidates.append(mid)
+            # Se nenhum candidato por keyword, usa todos exceto os pulados
+            if not candidates:
+                for m in models:
+                    mid = m.get("id", "") if isinstance(m, dict) else str(m)
+                    if not any(s in mid.lower() for s in skip_keywords):
+                        candidates.append(mid)
+
+            # Tenta cada modelo com uma requisi\u00e7\u00e3o m\u00ednima de chat
+            for mid in candidates:
+                chat_url = f"{base_url}/chat/completions"
+                payload = json.dumps({
+                    "model": mid,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 5,
+                }).encode()
+                try:
+                    req = urllib.request.Request(
+                        chat_url, data=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {key}",
+                        },
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        resp = json.loads(r.read())
+                        if resp.get("choices") or resp.get("candidates"):
+                            self._auto_selected_models[provider] = mid
+                            return mid
+                except Exception:
+                    continue
+            return None
+
         def _validate_openai_compatible(self, key: str, provider: str,
                                          base_url: str = None):
-            """Valida chave contra qualquer API compat\u00edvel com OpenAI (GET /models)."""
+            """Valida chave, lista modelos e auto-seleciona um funcional."""
             url = base_url or self.OPENAI_COMPATIBLE.get(provider, [None])[0]
             if not url:
-                # Tenta /models no base_url
                 cfg = self.OPENAI_COMPATIBLE.get(provider)
                 if cfg:
                     url = cfg[0].rstrip("/") + "/models"
@@ -889,10 +964,30 @@ def run():
                 )
                 with urllib.request.urlopen(req, timeout=10) as r:
                     data = json.loads(r.read())
-                models = data.get("data", [])
-                if models:
-                    return True, f"OK \u2014 {len(models)} modelos dispon\u00edveis"
-                return True, f"Conectado (HTTP {r.status})"
+                raw_models = data.get("data", [])
+
+                if not raw_models:
+                    return True, f"Conectado (HTTP {r.status})"
+
+                total = len(raw_models)
+
+                # Auto-seleciona modelo funcional
+                working = self._find_working_model(provider, key, raw_models)
+                if working:
+                    # Atualiza configura\u00e7\u00e3o nos dois lugares
+                    self.OPENAI_COMPATIBLE[provider] = (
+                        self.OPENAI_COMPATIBLE[provider][0], working
+                    )
+                    return True, (f"OK \u2014 {total} modelos, "
+                                   f"auto-selecionado: {working}")
+                # Atualiza config com o primeiro modelo como fallback
+                first = (raw_models[0].get("id", "")
+                         if isinstance(raw_models[0], dict) else str(raw_models[0]))
+                self.OPENAI_COMPATIBLE[provider] = (
+                    self.OPENAI_COMPATIBLE[provider][0], first
+                )
+                return True, (f"OK \u2014 {total} modelos "
+                               f"(sem chat confirmado, usando: {first})")
             except Exception as e:
                 err = str(e)
                 if "401" in err:
@@ -948,7 +1043,14 @@ def run():
                     data = json.loads(r.read())
                 models = data.get("models", [])
                 if models:
-                    return True, f"OK \u2014 {len(models)} modelos dispon\u00edveis"
+                    names = [m.get("name", "") for m in models if m.get("name")]
+                    # Auto-seleciona primeiro modelo Ollama dispon\u00edvel
+                    if names:
+                        self._auto_selected_models["Ollama (local)"] = names[0]
+                        self._ollama_models_cache = names
+                        return True, (f"OK \u2014 {len(names)} modelos, "
+                                       f"auto: {names[0]}")
+                    return True, f"OK \u2014 {len(models)} modelos"
                 return True, "Ollama rodando (sem modelos)"
             except Exception:
                 return False, "Ollama n\u00e3o encontrado em localhost:11434"
@@ -958,16 +1060,45 @@ def run():
             if not cfg:
                 return False, "Configura\u00e7\u00e3o do provedor n\u00e3o encontrada"
             url = cfg["url"]
+            auth_header = cfg.get("auth_header", "Authorization")
+            auth_prefix = cfg.get("auth_prefix", "Bearer ")
             try:
-                hdr = {cfg["auth_header"]: f"{cfg['auth_prefix']}{key}"}
-                req = urllib.request.Request(url, headers=hdr, method="GET")
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    return True, f"Conectado (HTTP {r.status})"
-            except Exception as e:
-                err = str(e)
-                if "401" in err:
-                    return False, "Chave inv\u00e1lida para este provedor"
-                return False, f"Erro: {err[:100]}"
+                # Tenta primeiro /models se a URL base parece ser API
+                models_url = url.rstrip("/")
+                if not models_url.endswith("/models"):
+                    models_url += "/models"
+                hdr = {auth_header: f"{auth_prefix}{key}"}
+                req = urllib.request.Request(models_url, headers=hdr, method="GET")
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = json.loads(r.read())
+                raw_models = data.get("data", data.get("models", []))
+                if raw_models:
+                    total = len(raw_models)
+                    working = self._find_working_model(
+                        self.api_provider, key, raw_models
+                    )
+                    if working:
+                        cfg["model"] = working
+                        return True, (f"OK \u2014 {total} modelos, "
+                                       f"auto: {working}")
+                    first = (raw_models[0].get("id", "")
+                             if isinstance(raw_models[0], dict)
+                             else str(raw_models[0]))
+                    cfg["model"] = first
+                    return True, f"OK \u2014 {total} modelos (usando: {first})"
+                return True, f"Conectado (HTTP {r.status})"
+            except Exception:
+                # Fallback: tenta GET na URL base
+                try:
+                    hdr = {auth_header: f"{auth_prefix}{key}"}
+                    req = urllib.request.Request(url, headers=hdr, method="GET")
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        return True, f"Conectado (HTTP {r.status})"
+                except Exception as e:
+                    err = str(e)
+                    if "401" in err:
+                        return False, "Chave inv\u00e1lida para este provedor"
+                    return False, f"Erro: {err[:100]}"
 
         # ==================================================================
         #  Handlers — Build
@@ -996,12 +1127,16 @@ def run():
                 )
 
                 kb_path = str(Path(__file__).resolve().parent.parent / "known_fixes.json")
+                selected_model = self._auto_selected_models.get(
+                    self.api_provider
+                )
                 self.orch = FlutterBuildOrchestrator(
                     project_path=str(self.project_dir),
                     auto_install=auto_install,
                     log_callback=self._on_log,
                     api_provider=self.api_provider if self.api_key else None,
                     api_key=self.api_key or None,
+                    api_model=selected_model,
                     kb_path=kb_path,
                 )
                 success = self.orch.orchestrate(

@@ -159,6 +159,7 @@ class FlutterBuildOrchestrator:
                  log_callback=None,
                  api_provider: str = None,
                  api_key: str = None,
+                 api_model: str = None,
                  kb_path: str = None):
         self.project_path = Path(project_path).resolve()
         if Path(output_dir).is_absolute():
@@ -175,6 +176,7 @@ class FlutterBuildOrchestrator:
         self.last_apk_path = None
         self.api_provider = api_provider
         self.api_key = api_key
+        self.api_model = api_model
         self.kb_path = Path(kb_path) if kb_path else None
         self._last_errors = []
         self._last_fix_applied = None
@@ -663,7 +665,8 @@ class FlutterBuildOrchestrator:
 
     # ── AI auto-correction ────────────────────────────────────────────
 
-    def _ai_fix_code(self, errors: str, code: str) -> Optional[str]:
+    def _ai_fix_code(self, errors: str, code: str,
+                      extra_files: Optional[dict] = None) -> Optional[str]:
         """Chama a API de IA para corrigir o c\u00f3digo com base nos erros."""
         if not self.api_key or not self.api_provider:
             return None
@@ -673,19 +676,35 @@ class FlutterBuildOrchestrator:
             self.log(f"Provedor IA n\u00e3o configurado: {self.api_provider}", "WARNING")
             return None
 
+        # Usa api_model se foi fornecido (auto-selecionado pelo GUI)
+        model = self.api_model or cfg["model"]
+        extra = ""
+        if extra_files:
+            for name, content in extra_files.items():
+                if name != "main.dart" and content:
+                    extra += f"\nARQUIVO ({name}):\n```\n{content[:1500]}\n```\n"
+
         prompt = (
-            "Voc\u00ea \u00e9 um especialista em Flutter/Dart.\n"
-            "O c\u00f3digo abaixo falhou ao compilar com os erros listados.\n\n"
-            f"ERROS DO COMPILADOR:\n{errors[:2000]}\n\n"
+            "Voc\u00ea \u00e9 um especialista em Flutter/Dart/Android.\n"
+            "O projeto abaixo falhou ao compilar com os erros listados.\n\n"
+            f"ERROS DO COMPILADOR:\n{errors[:3000]}\n\n"
             "C\u00d3DIGO DART (main.dart):\n"
-            f"```dart\n{code[:4000]}\n```\n\n"
+            f"```dart\n{code[:4000]}\n```\n"
+            f"{extra}\n"
             "TAREFA:\n"
-            "1. Analise cada erro e corrija o c\u00f3digo\n"
+            "1. Analise cada erro e corrija o c\u00f3digo necess\u00e1rio\n"
             "2. Mantenha a l\u00f3gica e funcionalidade originais\n"
             "3. Corrija apenas o necess\u00e1rio para compilar\n"
-            "4. Retorne APENAS o c\u00f3digo Dart corrigido, sem explica\u00e7\u00f5es\n"
-            "5. N\u00e3o inclua marcadores de c\u00f3digo na resposta\n"
-            "IMPORTANTE: Retorne SOMENTE o c\u00f3digo Dart puro."
+            "4. Se o erro for em AndroidManifest.xml ou build.gradle,"
+            " corrija esses arquivos tamb\u00e9m\n"
+            "5. Retorne APENAS o conte\u00fado corrigido do(s) arquivo(s),"
+            " no formato:\n"
+            "   ARQUIVO: caminho/relativo\n"
+            "   ```\n"
+            "   conte\u00fado corrigido\n"
+            "   ```\n"
+            "6. Mantenha arquivos sem erros inalterados\n"
+            "IMPORTANTE: Inclua APENAS arquivos que precisam de corre\u00e7\u00e3o."
         )
 
         self.log(f"Enviando erros para {self.api_provider}...", "INFO")
@@ -694,7 +713,7 @@ class FlutterBuildOrchestrator:
             if cfg["type"] == "gemini":
                 url = (
                     f"https://generativelanguage.googleapis.com/v1beta/"
-                    f"models/{cfg['model']}:generateContent"
+                    f"models/{model}:generateContent"
                     f"?key={self.api_key}"
                 )
                 payload = json.dumps({
@@ -707,7 +726,7 @@ class FlutterBuildOrchestrator:
             elif cfg["type"] == "anthropic":
                 url = "https://api.anthropic.com/v1/messages"
                 payload = json.dumps({
-                    "model": cfg["model"],
+                    "model": model,
                     "max_tokens": 4096,
                     "messages": [{"role": "user", "content": prompt}],
                 })
@@ -721,7 +740,7 @@ class FlutterBuildOrchestrator:
             else:  # openai-compatible
                 url = f"{cfg['url'].rstrip('/')}/chat/completions"
                 payload = json.dumps({
-                    "model": cfg["model"],
+                    "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
                     "max_tokens": 4096,
@@ -749,6 +768,48 @@ class FlutterBuildOrchestrator:
                         .get("content", ""))
 
             fixed = text.strip()
+
+            # Parse multi-file output: ARQUIVO: path\n```\ncontent\n```
+            file_fixes = {}
+            current_file = None
+            current_content = []
+            in_block = False
+            for line in fixed.split("\n"):
+                m = re.match(r"^ARQUIVO:\s*(.+)$", line)
+                if m:
+                    if current_file and current_content:
+                        file_fixes[current_file] = "\n".join(current_content)
+                    current_file = m.group(1).strip()
+                    current_content = []
+                    in_block = False
+                elif line.strip().startswith("```"):
+                    in_block = not in_block
+                elif current_file is not None and not in_block:
+                    current_content.append(line)
+            if current_file and current_content:
+                file_fixes[current_file] = "\n".join(current_content)
+
+            if file_fixes:
+                self.log(f"IA corrigiu {len(file_fixes)} arquivo(s)", "SUCCESS")
+                # Apply all fixes
+                main_fix = None
+                for rel_path, content in file_fixes.items():
+                    abs_path = self.project_path / rel_path
+                    if abs_path.exists():
+                        abs_path.write_text(content.strip() + "\n", encoding="utf-8")
+                        self.log(f"Corrigido: {rel_path}", "SUCCESS")
+                    if rel_path == "lib/main.dart" or rel_path == "main.dart":
+                        main_fix = content
+                if main_fix:
+                    return main_fix
+                # If main.dart wasn't in the fixes, try single-file fallback
+                single = list(file_fixes.values())[0]
+                if len(single) > 50:
+                    return single
+                self.log("IA retornou conte\u00fado muito curto", "WARNING")
+                return None
+
+            # Fallback: single Dart code block
             if fixed.startswith("```"):
                 fixed = "\n".join(
                     l for l in fixed.split("\n")
@@ -766,12 +827,94 @@ class FlutterBuildOrchestrator:
             self.log(f"Erro na chamada IA: {str(e)[:150]}", "ERROR")
         return None
 
+    def _read_file_safe(self, *parts) -> Optional[str]:
+        path = self.project_path.joinpath(*parts)
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
+    def _write_file_safe(self, content: str, *parts) -> bool:
+        path = self.project_path.joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        self.log(f"Arquivo atualizado: {path.relative_to(self.project_path)}", "INFO")
+        return True
+
+    def _apply_ai_fixes(self, errors: str, fixes: dict) -> bool:
+        """Aplica corre\u00e7\u00f5es da IA em m\u00faltiplos arquivos."""
+        applied = 0
+        for rel_path, new_content in fixes.items():
+            abs_path = self.project_path / rel_path
+            if not abs_path.exists():
+                self.log(f"Arquivo n\u00e3o encontrado: {rel_path}", "WARNING")
+                continue
+            old = abs_path.read_text(encoding="utf-8")
+            if old.strip() == new_content.strip():
+                continue
+            abs_path.write_text(new_content.strip() + "\n", encoding="utf-8")
+            self.log(f"Corrigido: {rel_path}", "SUCCESS")
+            applied += 1
+        return applied > 0
+
     def _fix_errors_and_retry(self, stderr: str, release: bool,
                                build_number: Optional[str]) -> bool:
         """Tenta corrigir erros com IA e recompilar."""
-        errors = stderr[:3000]
+        errors = stderr[:5000]
         if not errors.strip():
             return False
+
+        # Colete arquivos relevantes para contexto
+        files = {}
+        for key, path in [
+            ("main.dart", ["lib", "main.dart"]),
+            ("AndroidManifest.xml",
+             ["android", "app", "src", "main", "AndroidManifest.xml"]),
+            ("app/build.gradle",
+             ["android", "app", "build.gradle"]),
+            ("build.gradle",
+             ["android", "build.gradle"]),
+        ]:
+            content = self._read_file_safe(*path)
+            if content:
+                files[key] = content
+
+        cache_parts = errors[:500]
+        for k, v in files.items():
+            cache_parts += k + v[:500]
+        cache_key = hashlib.md5(cache_parts.encode()).hexdigest()
+
+        # Se o erro \u00e9 especificamente sobre v1 embedding, corrige diretamente
+        if "v1 embedding" in errors.lower() or "flutterEmbedding" not in files.get("AndroidManifest.xml", ""):
+            manifest_path = self.project_path / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
+            if manifest_path.exists():
+                manifest = manifest_path.read_text(encoding="utf-8")
+                if '<meta-data android:name="flutterEmbedding"' not in manifest:
+                    manifest = manifest.replace(
+                        "</application>",
+                        '        <meta-data\n'
+                        '            android:name="flutterEmbedding"\n'
+                        '            android:value="2"/>\n'
+                        '    </application>'
+                    )
+                    if 'android:launchMode="singleTop"' not in manifest:
+                        manifest = manifest.replace(
+                            'android:exported="true">',
+                            'android:exported="true"\n'
+                            '            android:launchMode="singleTop"\n'
+                            '            android:taskAffinity=""\n'
+                            '            android:theme="@android:style/Theme.Light.NoTitleBar"\n'
+                            '            android:configChanges="orientation|keyboardHidden|'
+                            'keyboard|screenSize|smallestScreenSize|locale|layoutDirection|'
+                            'fontScale|screenLayout|density|uiMode"\n'
+                            '            android:hardwareAccelerated="true"\n'
+                            '            android:windowSoftInputMode="adjustResize">'
+                        )
+                    manifest_path.write_text(manifest, encoding="utf-8")
+                    self.log("AndroidManifest.xml corrigido (flutterEmbedding=2)", "SUCCESS")
+
+        # Verifica cache
+        if cache_key in self._fix_cache:
+            self.log("Usando corre\u00e7\u00e3o em cache", "INFO")
+            if self._apply_ai_fixes(errors, self._fix_cache[cache_key]):
+                return self._retry_build(release, build_number)
 
         main_dart = self.project_path / "lib" / "main.dart"
         if not main_dart.exists():
@@ -779,20 +922,12 @@ class FlutterBuildOrchestrator:
             return False
 
         code = main_dart.read_text(encoding="utf-8")
-
-        # Verifica cache de corre\u00e7\u00e3o para este erro
-        cache_key = hashlib.md5((errors[:500] + code[:500]).encode()).hexdigest()
-        if cache_key in self._fix_cache:
-            self.log("Usando corre\u00e7\u00e3o em cache", "INFO")
-            main_dart.write_text(self._fix_cache[cache_key], encoding="utf-8")
-            return self._retry_build(release, build_number)
-
-        fixed = self._ai_fix_code(errors, code)
+        fixed = self._ai_fix_code(errors, code, files)
         if not fixed:
             return False
 
         main_dart.write_text(fixed, encoding="utf-8")
-        self._fix_cache[cache_key] = fixed
+        self._fix_cache[cache_key] = {}
         self._last_errors = errors[:500]
         self._last_fix_applied = True
 
