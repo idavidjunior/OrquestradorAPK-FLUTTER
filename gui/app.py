@@ -22,6 +22,7 @@ import tempfile
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from gui.logger import Logger
 from gui.knowledge_base import KnowledgeBase
