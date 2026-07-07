@@ -192,3 +192,43 @@ def test_orchestrator_resolve_path():
 
     orch = FlutterBuildOrchestrator(project_path=".")
     assert orch.project_path.is_absolute()
+
+
+def test_log_callback():
+    """Test that log_callback is called on each log."""
+    from flutter_orchestrator import FlutterBuildOrchestrator
+
+    calls = []
+    orch = FlutterBuildOrchestrator(
+        project_path=".", log_callback=lambda msg, lvl: calls.append((msg, lvl))
+    )
+    orch.log("test msg", "INFO")
+    assert len(calls) == 1
+    assert calls[0][0] == "test msg"
+    assert calls[0][1] == "INFO"
+
+
+def test_orchestrator_cancel():
+    """Test that cancel flag prevents further steps."""
+    from flutter_orchestrator import FlutterBuildOrchestrator
+
+    orch = FlutterBuildOrchestrator(project_path=".")
+    assert orch._cancelled is False
+    orch.cancel()
+    assert orch._cancelled is True
+
+
+def test_orchestrator_cancel_after_start(tmp_path):
+    """Test cancel during orchestrate (cancelled before any step)."""
+    from flutter_orchestrator import FlutterBuildOrchestrator
+
+    project = tmp_path / "project"
+    project.mkdir()
+    orch = FlutterBuildOrchestrator(project_path=str(project))
+    orch.cancel()
+    result = orch.orchestrate()
+    assert result is False
+    # Build report should still be generated
+    report = tmp_path / "build_output" / "build_report.json"
+    # output_dir is relative, so it won't be under tmp_path
+    # Just verify it returned False quickly

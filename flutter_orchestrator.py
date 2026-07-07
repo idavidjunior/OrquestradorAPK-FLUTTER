@@ -105,14 +105,20 @@ class FlutterBuildOrchestrator:
 
     def __init__(self, project_path: str,
                  output_dir: str = "build_output",
-                 auto_install: bool = False):
+                 auto_install: bool = False,
+                 log_callback=None):
         self.project_path = Path(project_path).resolve()
         self.output_dir = Path(output_dir).resolve()
         self.auto_install = auto_install
+        self._log_callback = log_callback
         self.build_log: List[Dict] = []
         self.start_time = datetime.now()
         self.flutter_cmd = "flutter"
         self.install_dir = Path.home() / ".flutter_auto"
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     # ── Logging ────────────────────────────────────────────────────────
 
@@ -127,6 +133,8 @@ class FlutterBuildOrchestrator:
         }
         color = color_map.get(level, Color.RESET)
         print(f"{color}[{timestamp}] [{level}] {message}{Color.RESET}")
+        if self._log_callback:
+            self._log_callback(message, level)
 
     # ── Prerequisites ──────────────────────────────────────────────────
 
@@ -543,6 +551,10 @@ class FlutterBuildOrchestrator:
 
         apk_path = None
         for name, fn in steps:
+            if self._cancelled:
+                self.log("Build cancelado pelo usu\u00e1rio", "WARNING")
+                self.generate_build_report(apk_path, False)
+                return False
             self.log(f"\n>>> {name}", "STEP")
             try:
                 result = fn()
