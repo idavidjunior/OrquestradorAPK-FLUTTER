@@ -93,14 +93,19 @@ class ProjectSourceManager:
             return False
 
     @staticmethod
-    def organize_pasted_code(raw, log):
-        """Organiza c\u00f3digo colado, separando Dart, YAML e XML."""
-        log.info("Organizando c\u00f3digo colado...")
+    def organize_pasted_code(raw, log, kb=None):
+        """Organiza código colado, separando Dart, YAML e XML e aplicando correções estruturais."""
+        log.info("Organizando código colado...")
         dart, pubspec_frag, manifest = ProjectSourceManager._split_pasted_content(
             raw, log
         )
         dart, _ = ProjectSourceManager._resolve_package_aliases(dart, log)
         dart, _ = ProjectSourceManager._apply_static_fixes(dart, log)
+
+        if kb:
+            dart, applied = kb.proactive_restructure(dart)
+            if applied:
+                log.ok(f"Reestruturação: {', '.join(applied)}")
 
         non_dart = [
             l for l in dart.split("\n")

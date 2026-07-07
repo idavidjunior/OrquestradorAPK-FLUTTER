@@ -1,9 +1,9 @@
 {
   "_meta": {
-    "version": "1.0",
+    "version": "2.0",
     "description": "Cérebro do OrquestradorAPK — erros conhecidos e suas correções. Cresce automaticamente a cada novo erro resolvido.",
     "total_fixes_applied": 3,
-    "last_updated": "2026-06-20"
+    "last_updated": "2026-07-07"
   },
   "fixes": [
     {
@@ -66,7 +66,7 @@
     },
     {
       "id": "shared_preferences_await",
-      "description": "SharedPreferences.getX() é síncrono desde v2.x — await desnecessário",
+      "description": "SharedPreferences.getX() é síncrono desde v2.x",
       "error_patterns": [
         "await prefs.get",
         "The await expression can only be used in an async"
@@ -105,7 +105,7 @@
     },
     {
       "id": "switch_exhaustive_loopmode",
-      "description": "Switch em LoopMode sem case default — erro de exhaustiveness Dart 3",
+      "description": "Switch em LoopMode sem case default — exhaustiveness Dart 3",
       "error_patterns": [
         "not exhaustively matched",
         "doesn't match 'LoopMode.restart'",
@@ -148,7 +148,7 @@
         "media_store": "on_audio_query: ^2.9.0"
       },
       "fix_hint": "media_store não existe. Use on_audio_query para acessar a MediaStore do Android.",
-      "explanation": "O pacote 'media_store' nunca existiu no pub.dev. O equivalente correto é 'on_audio_query' que fornece acesso à MediaStore do Android com API Dart nativa.",
+      "explanation": "O pacote 'media_store' nunca existiu no pub.dev. O equivalente correto é 'on_audio_query'.",
       "times_applied": 1,
       "source": "manual"
     },
@@ -171,7 +171,7 @@
         }
       ],
       "fix_hint": "Use DeviceInfoPlugin().androidInfo.then((info) => info.version.sdkInt >= N)",
-      "explanation": "Build.VERSION.SDK_INT é API Java/Android SDK. Em Dart/Flutter use device_info_plus: final info = await DeviceInfoPlugin().androidInfo; if (info.version.sdkInt >= 33)",
+      "explanation": "Build.VERSION.SDK_INT é API Java/Android SDK. Em Dart/Flutter use device_info_plus.",
       "times_applied": 1,
       "source": "manual"
     },
@@ -190,7 +190,7 @@
       "type": "android_gradle_fix",
       "operations": [],
       "fix_hint": "O orquestrador irá adicionar automaticamente namespace ao build.gradle do plugin problemático",
-      "explanation": "Plugins Android antigos não têm namespace declarado no build.gradle, exigido pelo Android Gradle Plugin 8.0+. O orquestrador detecta e corrige automaticamente adicionando namespace baseado no package do AndroidManifest.xml",
+      "explanation": "Plugins Android antigos não têm namespace declarado no build.gradle, exigido pelo AGP 8.0+.",
       "times_applied": 0,
       "source": "manual"
     },
@@ -210,7 +210,7 @@
       "type": "info_only",
       "operations": [],
       "fix_hint": "Atualize o Flutter SDK ou ajuste a versão mínima no pubspec.yaml",
-      "explanation": "O projeto requer uma versão específica do Flutter SDK. Verifique o campo 'sdk' em pubspec.yaml e atualize o Flutter SDK se necessário.",
+      "explanation": "O projeto requer uma versão específica do Flutter SDK. Verifique o campo 'sdk' em pubspec.yaml.",
       "times_applied": 0,
       "source": "manual"
     },
@@ -256,7 +256,7 @@
         "import 'package:flutter/material.dart';"
       ],
       "fix_hint": "Adicione import 'package:flutter/material.dart';",
-      "explanation": "Widgets do Material Design como Colors, Theme, Scaffold, AppBar, Text e Container requerem o import de material.dart",
+      "explanation": "Widgets do Material Design requerem o import de material.dart",
       "times_applied": 0,
       "source": "manual"
     },
@@ -278,7 +278,7 @@
         "import 'package:flutter/cupertino.dart';"
       ],
       "fix_hint": "Adicione import 'package:flutter/cupertino.dart';",
-      "explanation": "Widgets estilo iOS como CupertinoApp, CupertinoButton e CupertinoTextField requerem o import de cupertino.dart",
+      "explanation": "Widgets estilo iOS requerem o import de cupertino.dart",
       "times_applied": 0,
       "source": "manual"
     },
@@ -297,7 +297,7 @@
       "type": "info_only",
       "operations": [],
       "fix_hint": "Adicione 'async' à função e 'await' às chamadas assíncronas",
-      "explanation": "Funções que retornam Future precisam ser marcadas com 'async' e as chamadas precisam usar 'await' para obter o valor",
+      "explanation": "Funções que retornam Future precisam ser marcadas com 'async'",
       "times_applied": 0,
       "source": "manual"
     },
@@ -340,7 +340,7 @@
         "import 'package:shared_preferences/shared_preferences.dart';"
       ],
       "fix_hint": "Adicione import 'package:shared_preferences/shared_preferences.dart';",
-      "explanation": "O pacote shared_preferences permite armazenar dados persistentes no dispositivo",
+      "explanation": "O pacote shared_preferences permite armazenar dados persistentes",
       "times_applied": 0,
       "source": "manual"
     },
@@ -383,6 +383,1112 @@
       "operations": [],
       "fix_hint": "O orquestrador irá corrigir erros de sintaxe no pubspec.yaml automaticamente",
       "explanation": "Erros de sintaxe no pubspec.yaml como nomes de pacotes inválidos ou espaços extras são corrigidos automaticamente",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "android_v2_embedding",
+      "description": "Flutter v2 embedding não ativado no AndroidManifest.xml",
+      "error_patterns": [
+        "flutterEmbedding",
+        "uses-sdk",
+        "The platform view"
+      ],
+      "context_patterns": [
+        "AndroidManifest.xml",
+        "application"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione <meta-data android:name=\"flutterEmbedding\" android:value=\"2\" /> dentro de <application> no AndroidManifest.xml",
+      "explanation": "O Flutter v2 embedding é necessário para plugins que usam PlatformView. Sem ele, plugins de câmera, mapa e webview falham.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "android_launch_mode",
+      "description": "launchMode não configurado para singleTop no AndroidManifest.xml",
+      "error_patterns": [
+        "SingleTask",
+        "singleTop",
+        "launchMode",
+        "ActivityNotFoundException"
+      ],
+      "context_patterns": [
+        "AndroidManifest.xml",
+        "activity"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione android:launchMode=\"singleTop\" à <activity> principal no AndroidManifest.xml",
+      "explanation": "SingleTop evita que a Activity seja recriada ao receber deep links ou notificações, preservando o estado do Flutter.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "android_normal_theme",
+      "description": "NormalTheme não declarado no AndroidManifest.xml",
+      "error_patterns": [
+        "NormalTheme",
+        "Theme.AppCompat",
+        "MissingTheme"
+      ],
+      "context_patterns": [
+        "AndroidManifest.xml",
+        "theme"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione android:theme=\"@style/NormalTheme\" à <activity> no AndroidManifest.xml e defina o style no themes.xml",
+      "explanation": "O NormalTheme é o tema padrão do Flutter para Android. Sem ele, o app pode usar temas incompatíveis com o Flutter engine.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "android_config_changes",
+      "description": "configChanges incompleto no AndroidManifest.xml",
+      "error_patterns": [
+        "Configuration change",
+        "Recreating activity",
+        "configChanges"
+      ],
+      "context_patterns": [
+        "AndroidManifest.xml",
+        "configChanges"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione android:configChanges=\"orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode\" à <activity>",
+      "explanation": "O Flutter gerencia mudanças de configuração internamente. Sem configChanges completo, a Activity recria e perde o estado do app.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "android_soft_input_mode",
+      "description": "windowSoftInputMode não configurado no AndroidManifest.xml",
+      "error_patterns": [
+        "softInputMode",
+        "adjustResize",
+        "Soft keyboard"
+      ],
+      "context_patterns": [
+        "AndroidManifest.xml",
+        "activity"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione android:windowSoftInputMode=\"adjustResize\" à <activity> no AndroidManifest.xml",
+      "explanation": "adjustResize permite que o layout seja redimensionado automaticamente quando o teclado virtual aparece.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "gradle_version_does_not_exist",
+      "description": "Versão do Gradle especificada não existe no repositório",
+      "error_patterns": [
+        "Gradle version 8.14",
+        "was not found",
+        "could not be resolved"
+      ],
+      "context_patterns": [
+        "gradle-wrapper.properties",
+        "distributionUrl"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Use uma versão existente do Gradle. Ex: 8.14.0 nunca foi publicado — use 8.12 ou 8.13. Consulte https://services.gradle.org/distributions/",
+      "explanation": "A versão 8.14.0 do Gradle nunca foi publicada. Sempre verifique a existência da versão em services.gradle.org antes de especificá-la.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "gradle_properties_url_escape",
+      "description": "URI mal formatada no gradle-wrapper.properties devido a escape incorreto de dois-pontos",
+      "error_patterns": [
+        "URI mal formatada",
+        "URISyntaxException",
+        "gradle-wrapper.properties"
+      ],
+      "context_patterns": [
+        "gradle-wrapper.properties",
+        "distributionUrl",
+        "https\\\\:"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Em Windows PowerShell, escape os dois-pontos na URL: use '\\:' em vez de '\\\\:' no gradle-wrapper.properties. O formato correto é 'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.12-all.zip'",
+      "explanation": "No gradle-wrapper.properties, a URL deve usar '\\:' como escape de dois-pontos (padrão antigo do Gradle). Em PowerShell, a string precisa de escape adicional no terminal, mas o arquivo em si deve conter exatamente 'https\\://'.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "gradle_skip_dependency_validation",
+      "description": "Erro de dependência do Gradle resolvido com flag --android-skip-build-dependency-validation",
+      "error_patterns": [
+        "Android dependency validation",
+        "Dependency validation failed",
+        "build dependency"
+      ],
+      "context_patterns": [
+        "gradle",
+        "build"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione a flag '--android-skip-build-dependency-validation' ao comando 'flutter build apk'",
+      "explanation": "A validação de dependências do Android pode falhar em projetos complexos. O orquestrador detecta este erro e retry automaticamente com a flag de skip.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "nvidia_key_no_inference",
+      "description": "Chave de API NVIDIA funciona para listar modelos (GET /models) mas não para inferência (POST /chat/completions)",
+      "error_patterns": [
+        "401",
+        "Unauthorized",
+        "not authorized",
+        "NVIDIA",
+        "nvapi-"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Chaves NVIDIA nvapi-... podem ter permissão apenas para GET /models (listagem). Teste POST /chat/completions separadamente. Se falhar (401), a chave não tem permissão de inferência. Considere trocar de provedor ou gerar uma nova chave com permissões de chat.",
+      "explanation": "A API da NVIDIA tem endpoints separados para gerenciamento de modelos (/models) e inferência (/chat/completions). Algumas chaves têm acesso apenas à listagem. O orquestrador agora testa automaticamente ambos os endpoints.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "deepseek_key_payment_required",
+      "description": "Chave DeepSeek válida mas sem créditos — retorna 402 Payment Required",
+      "error_patterns": [
+        "402",
+        "Payment Required",
+        "insufficient balance",
+        "DeepSeek",
+        "deepseek"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "DeepSeek pode validar a chave mas retornar 402 se a conta não tiver créditos. Adicione fundos à conta DeepSeek ou troque de provedor.",
+      "explanation": "DeepSeek aceita a requisição de validação da chave (200 OK), mas na primeira chamada de inferência retorna 402 se a conta estiver sem créditos. Não é um erro de chave — é falta de saldo.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "no_working_model_found",
+      "description": "Nenhum modelo funcional disponível para o provedor de IA selecionado",
+      "error_patterns": [
+        "All models exhausted",
+        "No working model found",
+        "No model available"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O orquestrador testa automaticamente todos os modelos do provedor. Se nenhum funcionar, a chave pode não ter permissão de inferência ou o provedor pode estar fora do ar. Tente outro provedor.",
+      "explanation": "O orquestrador itera sobre todos os modelos disponíveis do provedor, testando cada um. Se todos falharem (401, 403, 402, timeout), o erro é reportado. A solução é mudar de provedor ou verificar a validade da chave.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "ai_fallback_recursion_int_error",
+      "description": "Recursão infinita no fallback da IA causa erro 'int not subscriptable'",
+      "error_patterns": [
+        "not subscriptable",
+        "int object is not subscriptable",
+        "recursion"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O loop de fallback da IA estava retornando 'None' em vez de um dicionário com 'choices'. Corrigido para retornar {'choices': [{'message': {'content': '// Fallback'}}]} quando todos os modelos falham.",
+      "explanation": "Quando todos os modelos de IA falham, o código antigo retornava None (que é um int em alguns contextos de indexação), causando 'int object is not subscriptable'. Agora retorna explicitamente um fallback com dicionário vazio.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "model_blacklisted_401_403",
+      "description": "Modelo de IA retorna 401/403 e é automaticamente adicionado à blacklist",
+      "error_patterns": [
+        "blacklist",
+        "blacklisted",
+        "401",
+        "403"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O orquestrador mantém um conjunto _bad_models que blacklistea modelos que retornam 401/403. Se achar que um modelo foi blacklistado incorretamente, reinicie o orquestrador.",
+      "explanation": "Modelos que retornam erro de autenticação (401) ou proibido (403) são blacklisteados para evitar tentativas repetidas. A blacklist existe apenas durante a sessão.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "variable_shadow_builtins",
+      "description": "Variável local 'code' sombreia import 'code' do módulo http.client",
+      "error_patterns": [
+        "'code'",
+        "shadow",
+        "assignment"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Renomeie a variável local 'code' para 'http_code' ou 'status_code' para evitar conflito com o código-fonte do projeto.",
+      "explanation": "A variável local 'code' no manipulador de respostas HTTP conflitava com o parâmetro 'code' da função _ai_fix_code, causando comportamento inesperado.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "missing_httperror_import",
+      "description": "HTTPError do urllib não importado no módulo de correção de IA",
+      "error_patterns": [
+        "HTTPError",
+        "HTTP Error",
+        "urllib"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione 'from urllib.error import HTTPError' no topo do arquivo que usa HTTPError.",
+      "explanation": "O tratamento de exceções HTTP usava HTTPError sem importá-lo, causando NameError em runtime quando um erro HTTP ocorria.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "adb_not_found_path",
+      "description": "ADB (Android Debug Bridge) não encontrado no PATH do sistema",
+      "error_patterns": [
+        "adb: command not found",
+        "'adb' is not recognized",
+        "adb.exe",
+        "ADB not found"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O ADB faz parte do Android SDK. Instale o Android SDK Platform Tools ou adicione o caminho do adb ao PATH. Caminho típico: C:\\Users\\<user>\\AppData\\Local\\Android\\Sdk\\platform-tools\\",
+      "explanation": "ADB é necessário para detectar dispositivos Android conectados. O orquestrador usa polling de ADB para detectar quando o dispositivo está pronto para instalação do APK.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "adb_poll_during_build",
+      "description": "Polling do ADB conflita com o build do Flutter, causando falhas intermitentes",
+      "error_patterns": [
+        "ADB",
+        "device",
+        "error",
+        "during build"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Pause o polling do ADB durante o build do Flutter e retome após o build ser concluído. O orquestrador faz isso automaticamente via _set_build_state().",
+      "explanation": "Comandos ADB simultâneos durante o build podem causar conflitos. O orquestrador agora pausa o polling ADB (torna _stop_adb_poll True) durante flutter build e retoma após a conclusão.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "flutter_not_found_path",
+      "description": "Flutter SDK não encontrado no PATH ou nos caminhos padrão de instalação",
+      "error_patterns": [
+        "flutter: command not found",
+        "'flutter' is not recognized",
+        "Flutter SDK not found"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Instale o Flutter SDK ou adicione o caminho ao PATH. Caminhos comuns: C:\\flutter\\bin, C:\\Users\\<user>\\flutter\\bin, C:\\tools\\flutter\\bin",
+      "explanation": "O orquestrador procura o Flutter SDK no PATH, em caminhos comuns do Windows e em ~/.flutter_auto/flutter/bin. Se não encontrar, baixa automaticamente.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "flutter_invalid_path",
+      "description": "Caminho do Flutter SDK especificado é inválido ou não contém o executável flutter",
+      "error_patterns": [
+        "Invalid Flutter SDK path",
+        "não contém flutter",
+        "flutter.bat not found"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Verifique se o caminho termina com '\\bin' ou se o caminho completo está correto. O executável flutter.bat deve estar presente no diretório.",
+      "explanation": "O caminho do Flutter SDK deve apontar para o diretório raiz do SDK (ex: C:\\flutter) ou para o subdiretório bin (ex: C:\\flutter\\bin). O executável flutter.bat é esperado.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "flutter_create_fallback",
+      "description": "flutter create falha com erro de template ou permissão — fallback para projeto mínimo",
+      "error_patterns": [
+        "flutter create",
+        "Failed to create project",
+        "Could not create project"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O orquestrador faz fallback criando manualmente a estrutura mínima: pubspec.yaml, lib/main.dart, android/app/build.gradle, AndroidManifest.xml. Se falhar novamente, verifique permissões de escrita no diretório.",
+      "explanation": "Quando flutter create falha (permissão, template corrompido, rede), o orquestrador gera a estrutura manualmente: cria diretórios, escreve pubspec.yaml com configuração básica, lib/main.dart com app vazio, e esqueleto Android.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "pubspec_merged_yaml_lines",
+      "description": "pubspec.yaml com linhas mescladas — erro de parser YAML",
+      "error_patterns": [
+        "YAML",
+        "mapping values are not allowed",
+        "did not find expected key",
+        "while parsing a block mapping"
+      ],
+      "context_patterns": [
+        "pubspec.yaml",
+        "  "
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O pubspec.yaml pode ter linhas mescladas devido a template mal formatado. Use validação YAML e separe linhas no formato 'key: value'.",
+      "explanation": "Alguns templates de pubspec.yaml geram linhas onde a chave e valor estão na mesma linha sem separação adequada, ou indentação quebrada. O orquestrador valida e tenta corrigir detectando padrões de linha mesclada.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "kotlin_variable_before_assignment",
+      "description": "Variável Kotlin usada antes de ser atribuída em arquivo .kt de template",
+      "error_patterns": [
+        "Variable 'embeddedView' must be assigned",
+        "variable might not have been initialized",
+        "Kotlin: "
+      ],
+      "context_patterns": [
+        ".kt",
+        "package"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Inicialize a variável com um valor padrão ou use lateinit var. Ex: private var embeddedView: PlatformView? = null",
+      "explanation": "Arquivos Kotlin gerados por templates podem ter variáveis declaradas mas não inicializadas antes do uso. Adicionar inicialização padrão ou usar lateinit resolve.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "java_optional_not_imported",
+      "description": "Classe Optional do Java 8+ não importada em código Kotlin/Java de plugin",
+      "error_patterns": [
+        "Optional",
+        "Optional.empty",
+        "Optional.of"
+      ],
+      "context_patterns": [
+        ".kt",
+        ".java",
+        "Optional"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione 'import java.util.Optional' no topo do arquivo Kotlin/Java.",
+      "explanation": "Optional é uma classe do Java 8+ (java.util) que precisa ser explicitamente importada. Em templates de plugins Android, este import é frequentemente omitido.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "project_directory_already_exists",
+      "description": "Diretório do projeto já existe e não está vazio — conflito ao criar novo projeto",
+      "error_patterns": [
+        "already exists",
+        "directory is not empty",
+        "Project directory"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O orquestrador pergunta se deseja sobrescrever o projeto existente. Diga 'sim' para remover e recriar, ou 'não' para escolher outro diretório.",
+      "explanation": "Ao criar um novo projeto Flutter, se o diretório de destino já existir com conteúdo, o orquestrador oferece opções: sobrescrever (remove e recria) ou cancelar.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "invalid_flutter_project_name",
+      "description": "Nome de projeto Flutter inválido (hífens, caracteres especiais, começa com número)",
+      "error_patterns": [
+        "Project name",
+        "is not a valid Dart package name",
+        "Invalid project name"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Use apenas letras minúsculas, números e underscores. Não use hífens. O nome deve começar com letra. Ex: 'meu_app' em vez de 'meu-app' ou 'Meu App'.",
+      "explanation": "Flutter/Dart requer que nomes de pacote sigam convenções Dart: lowercase_with_underscores, começando com letra, sem hífens ou caracteres especiais.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "state_save_load_failure",
+      "description": "Falha ao salvar ou carregar estado do orquestrador (api_provider, api_key, último diretório)",
+      "error_patterns": [
+        "state.json",
+        "save state",
+        "load state",
+        ".flutter_orchestrator"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O estado é salvo em ~/.flutter_orchestrator/state.json. Verifique permissões de escrita no diretório. Se corrompido, delete o arquivo e reinicie.",
+      "explanation": "O orquestrador persiste api_provider, api_key e last_project_dir entre sessões. Falhas de permissão ou JSON corrompido podem impedir save/load. O estado é salvo em formato JSON simples.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "ai_provider_auto_detection",
+      "description": "Chave de API testada automaticamente contra múltiplos provedores para encontrar o correto",
+      "error_patterns": [
+        "Testing key against",
+        "provider",
+        "Working provider found"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Cole a chave no campo apropriado e clique em validar. O orquestrador testa automaticamente contra todos os provedores configurados (OpenAI, Gemini, Anthropic, OpenRouter, DeepSeek, NVIDIA, Groq, Together, Mistral, etc.).",
+      "explanation": "O orquestrador implementa detecção automática de provedor: testa a chave contra cada provedor em AI_PROVIDER_CONFIG até encontrar um que aceite a chave E tenha um modelo que funcione para chat.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "auto_model_selection_per_provider",
+      "description": "Seleção automática do melhor modelo disponível para cada provedor de IA",
+      "error_patterns": [
+        "Auto-selecting model",
+        "Available models for",
+        "Testing model"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "A seleção automática testa modelos por ordem de capacidade: DeepSeek, Gemini, Claude, GPT, etc. para cada provedor. Use o primeiro que retornar 200 OK.",
+      "explanation": "Para cada provedor, o orquestrador lista todos os modelos disponíveis via API, depois testa cada um com uma requisição de chat simples. O primeiro que retornar sucesso é selecionado automaticamente.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "provider_migration_automatic",
+      "description": "Migração automática de provedor quando o atual falha ou não tem modelos disponíveis",
+      "error_patterns": [
+        "Migrating from",
+        "No working models",
+        "Switching to provider"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Quando o provedor atual fica sem modelos ou a chave falha, o orquestrador procura automaticamente outro provedor compatível com a chave e migra.",
+      "explanation": "Se a validação da chave falhar no provedor atual (ou nenhum modelo funcionar), o orquestrador automaticamente testa outros provedores e migra a configuração. O dropdown da GUI é atualizado e o estado é salvo.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "dart_3_enum_exhaustiveness",
+      "description": "Erro de exhaustiveness Dart 3 em switch com enum — case obrigatório para todos os valores",
+      "error_patterns": [
+        "not exhaustively matched",
+        "doesn't match",
+        "The type"
+      ],
+      "context_patterns": [
+        "switch",
+        "enum"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Dart 3 exige que todos os valores do enum sejam cobertos no switch. Adicione 'default: break;' ou cubra todos os casos explicitamente.",
+      "explanation": "Desde Dart 3, switches sobre tipos selados (enums, sealed classes) devem ser exaustivos — cobrir todos os valores possíveis. Adicionar 'default: break;' resolve rapidamente.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "progress_status_feedback",
+      "description": "Falta de feedback visual de progresso durante operações longas (build, download, validação)",
+      "error_patterns": [
+        "progress",
+        "status",
+        "freeze",
+        "not responding"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O orquestrador usa CTkProgressBar + status label. Se não estiver vendo, verifique se o progress_callback está conectado corretamente. O build pode demorar minutos.",
+      "explanation": "Adicionada barra de progresso e label de status para feedback visual durante build ADB, download de dependências e validação de chave de IA. Callback é passado via parâmetro para todas as funções.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "android_min_sdk_version",
+      "description": "minSdkVersion muito baixo para plugins modernos (ex: camera, webview, firebase)",
+      "error_patterns": [
+        "minSdkVersion",
+        "cannot satisfy",
+        "The plugin requires a higher minimum SDK version",
+        "minSdk 21",
+        "minSdk 23"
+      ],
+      "context_patterns": [
+        "build.gradle",
+        "minSdk"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Aumente o minSdk no app/build.gradle. Plugins modernos geralmente exigem minSdk >= 21. Firebase e camera podem exigir >= 23.",
+      "explanation": "Plugins Flutter para Android estão cada vez mais exigentes quanto à versão mínima do SDK. Verifique os requisitos de cada plugin e ajuste o minSdkVersion no build.gradle.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "gradle_classpath_version",
+      "description": "Versão do Android Gradle Plugin (AGP) incompatível com a versão do Gradle",
+      "error_patterns": [
+        "Minimum supported Gradle version",
+        "The Android Gradle plugin requires",
+        "Gradle version"
+      ],
+      "context_patterns": [
+        "build.gradle",
+        "com.android"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Verifique a compatibilidade AGP x Gradle: AGP 8.x requer Gradle 8.x. Consulte developer.android.com/build/releases/gradle-plugin#compatibility",
+      "explanation": "Cada versão do Android Gradle Plugin requer uma versão específica do Gradle. AGP 8.0+ requer Gradle 8.0+. Versões incompatíveis causam erro de build.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "python_module_not_found",
+      "description": "Módulo Python necessário não está instalado (customtkinter, requests, etc.)",
+      "error_patterns": [
+        "ModuleNotFoundError",
+        "No module named",
+        "ImportError"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Instale com 'pip install -r requirements.txt' ou manualmente: pip install customtkinter requests pillow",
+      "explanation": "O orquestrador requer customtkinter, requests, PIL/pillow. Módulos que dependem de nativos como watchgod podem falhar em alguns ambientes.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "ai_loop_all_providers_exhausted",
+      "description": "Todos os provedores de IA foram testados e nenhum funcionou para a chave fornecida",
+      "error_patterns": [
+        "All providers exhausted",
+        "No provider works",
+        "Could not find any working provider"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "São 15 provedores testados. Se nenhum funcionar, a chave pode ser inválida ou o endpoint pode estar bloqueado por firewall/proxy. Gere uma nova chave ou verifique a conectividade de rede.",
+      "explanation": "O orquestrador testa a chave contra todos os 15 provedores configurados. Se todos retornarem erro (401, 403, 402, timeout), a chave é considerada inválida. O usuário deve gerar uma nova chave em um dos provedores suportados.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "no_device_connected_adb",
+      "description": "Nenhum dispositivo Android encontrado via ADB para instalação do APK",
+      "error_patterns": [
+        "No device connected",
+        "device 'emulator' not found",
+        "No devices"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Conecte um dispositivo Android via USB com depuração USB ativada, ou inicie um emulador Android. Execute 'adb devices' para verificar dispositivos conectados.",
+      "explanation": "O ADB precisa de pelo menos um dispositivo (físico ou emulador) para instalar o APK. Se nenhum for encontrado, o orquestrador aguarda até que um dispositivo seja conectado.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "apk_install_failure",
+      "description": "Falha ao instalar APK no dispositivo Android via ADB",
+      "error_patterns": [
+        "INSTALL_FAILED",
+        "Failure",
+        "INSTALL_PARSE_FAILED",
+        "INSTALL_FAILED_VERSION_DOWNGRADE",
+        "INSTALL_FAILED_UPDATE_INCOMPATIBLE"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Desinstale a versão anterior com 'adb uninstall <package>' ou use 'flutter install' com a flag --use-application-binary.",
+      "explanation": "Erros de instalação podem ocorrer por versão incompatível, assinatura diferente ou permissões. Desinstalar a versão anterior geralmente resolve.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "yaml_indentation_error",
+      "description": "Erro de indentação YAML no pubspec.yaml ou outros arquivos de configuração",
+      "error_patterns": [
+        "YAMLException",
+        "indentation",
+        "mapping values",
+        "did not find expected key"
+      ],
+      "context_patterns": [
+        "pubspec.yaml",
+        ".yaml",
+        ".yml"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "YAML usa espaços (não tabs) para indentação. Use exatamente 2 espaços por nível. Verifique se não há tabs misturadas com espaços.",
+      "explanation": "YAML é sensível a indentação. Arquivos gerados ou editados manualmente podem misturar tabs com espaços. Use um validador YAML para detectar problemas.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "git_not_initialized",
+      "description": "Repositório Git não inicializado no projeto Flutter",
+      "error_patterns": [
+        "fatal: not a git repository",
+        "git"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Execute 'git init' no diretório do projeto e 'git add .; git commit -m \"initial\". O orquestrador pode fazer isso automaticamente.",
+      "explanation": "O flutter create geralmente inicializa git automaticamente. Se não, o orquestrador pergunta se deseja inicializar. Git é útil para rastrear mudanças durante correções.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "target_platform_not_set",
+      "description": "Plataforma alvo não especificada — flutter build apk precisa de --target-platform",
+      "error_patterns": [
+        "Target platform",
+        "arm64",
+        "android-arm",
+        "android-arm64"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Adicione '--target-platform android-arm64' ao comando flutter build apk. Para compatibilidade máxima, use '--target-platform android-arm,android-arm64'.",
+      "explanation": "Alguns projetos precisam especificar a arquitetura alvo. android-arm64 cobre a maioria dos dispositivos modernos. Incluir android-arm adiciona compatibilidade com dispositivos mais antigos.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "missing_imports_top",
+      "description": "Imports não estão no topo do arquivo — movendo para o início",
+      "error_patterns": [
+        "Undefined name",
+        "Undefined class",
+        "Target of URI doesn't exist",
+        "Not found: 'package:"
+      ],
+      "context_patterns": [
+        "import "
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_imports_top"},
+        {"action": "ensure_material_import"}
+      ],
+      "explanation": "Imports em Dart devem estar no topo do arquivo, antes de qualquer código. O orquestrador move automaticamente imports soltos para o início.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "duplicate_imports_structural",
+      "description": "Imports duplicados encontrados — removendo redundâncias",
+      "error_patterns": [
+        "Duplicate import",
+        "already defined",
+        "is already defined"
+      ],
+      "context_patterns": [
+        "import "
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "remove_duplicate_imports"}
+      ],
+      "explanation": "Imports duplicados podem causar warnings ou erros. O orquestrador remove linhas de import repetidas automaticamente.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "missing_main_function",
+      "description": "Função main() ausente — injetando entry point",
+      "error_patterns": [
+        "does not contain a 'main'",
+        "Target of URI doesn't exist",
+        "main",
+        "Entry point"
+      ],
+      "context_patterns": [],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_main_function", "class_name": "MyApp"},
+        {"action": "ensure_run_app", "class_name": "MyApp"}
+      ],
+      "explanation": "Todo aplicativo Dart precisa de uma função main() como entry point. O orquestrador adiciona automaticamente main() com runApp().",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "missing_const_constructor",
+      "description": "Widget sem const constructor — adicionando construtor",
+      "error_patterns": [
+        "All widgets should have a const constructor",
+        "const constructor",
+        "must be const"
+      ],
+      "context_patterns": [
+        "extends StatelessWidget",
+        "extends StatefulWidget"
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_const_constructor"}
+      ],
+      "explanation": "Widgets em Flutter devem ter const constructor para otimização. O orquestrador adiciona 'const X({super.key})' às classes widget.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "missing_override_annotation",
+      "description": "@override ausente em método build() — adicionando anotação",
+      "error_patterns": [
+        "Missing annotation",
+        "Missing 'override'",
+        "override"
+      ],
+      "context_patterns": [
+        "Widget build",
+        "extends StatelessWidget",
+        "extends StatefulWidget"
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_override_annotation"}
+      ],
+      "explanation": "Métodos que sobrescrevem métodos da superclasse precisam de @override. O orquestrador adiciona @override antes de build().",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "missing_build_method",
+      "description": "Widget sem método build() — adicionando método obrigatório",
+      "error_patterns": [
+        "Missing build method",
+        "does not override",
+        "must override"
+      ],
+      "context_patterns": [
+        "extends StatelessWidget",
+        "extends StatefulWidget"
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_build_method"}
+      ],
+      "explanation": "Widgets em Flutter precisam implementar o método build(). O orquestrador adiciona @override Widget build(BuildContext context) com retorno padrão.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "incomplete_material_app",
+      "description": "MaterialApp sem parâmetros obrigatórios — corrigindo estrutura",
+      "error_patterns": [
+        "Required parameter",
+        "home",
+        "MaterialApp"
+      ],
+      "context_patterns": [
+        "MaterialApp"
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_material_app_structure"}
+      ],
+      "explanation": "MaterialApp precisa de parâmetros como home e title. O orquestrador adiciona Scaffold como home se ausente.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "unmatched_brackets",
+      "description": "Chaves desbalanceadas no código — corrigindo sintaxe",
+      "error_patterns": [
+        "Expected '}'",
+        "Expected to find '}'",
+        "unmatched",
+        "Expected a '}'"
+      ],
+      "context_patterns": [],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "fix_unmatched_brackets"}
+      ],
+      "explanation": "Chaves { } desbalanceadas causam erro de compilação. O orquestrador conta e adiciona ou remove chaves conforme necessário.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "missing_semicolons",
+      "description": "Ponto-e-vírgula ausente em statements — corrigindo sintaxe",
+      "error_patterns": [
+        "Expected to find ';'",
+        "Expected ';'",
+        "semicolon"
+      ],
+      "context_patterns": [],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_semicolons"}
+      ],
+      "explanation": "Statements em Dart precisam terminar com ;. O orquestrador adiciona ponto-e-vírgula onde necessário.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "code_sections_misordered",
+      "description": "Seções de código fora de ordem — reordenando estrutura",
+      "error_patterns": [
+        "Target of URI doesn't exist",
+        "Not found",
+        "Expected function"
+      ],
+      "context_patterns": [],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "reorder_sections"}
+      ],
+      "explanation": "Código Dart deve seguir ordem: imports, main(), classes. O orquestrador reorganiza seções automaticamente.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "duplicate_class_definitions",
+      "description": "Classes duplicadas encontradas — removendo definições redundantes",
+      "error_patterns": [
+        "already defined",
+        "Duplicate class",
+        "is already defined"
+      ],
+      "context_patterns": [
+        "class "
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "remove_duplicate_classes"}
+      ],
+      "explanation": "Definições de classe duplicadas causam erro de compilação. O orquestrador remove a segunda definição mantendo a primeira.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "code_outside_class",
+      "description": "Código Dart solto fora de classe ou função — movendo para main()",
+      "error_patterns": [
+        "Top-level declaration",
+        "Unexpected top-level",
+        "Expected class declaration"
+      ],
+      "context_patterns": [],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "inline_code_outside_class"}
+      ],
+      "explanation": "Código executável em Dart deve estar dentro de funções ou métodos. O orquestrador move código solto para dentro de main().",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "widget_without_scaffold",
+      "description": "MaterialApp sem Scaffold — adicionando estrutura de layout",
+      "error_patterns": [
+        "Scaffold",
+        "body",
+        "MaterialApp"
+      ],
+      "context_patterns": [
+        "MaterialApp"
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_scaffold_in_home"}
+      ],
+      "explanation": "O Scaffold é a estrutura base de layout do Material Design. O orquestrador envolve o home do MaterialApp com Scaffold.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "widget_structure_invalid",
+      "description": "Estrutura de widgets inválida — Scaffold sem MaterialApp",
+      "error_patterns": [
+        "MediaQuery",
+        "No MediaQuery",
+        "No Directionality",
+        "inheritFromWidgetOfExactType"
+      ],
+      "context_patterns": [
+        "Scaffold"
+      ],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_widget_structure"}
+      ],
+      "explanation": "Scaffold precisa estar dentro de MaterialApp para funcionar corretamente. O orquestrador cria a estrutura MaterialApp ao redor do Scaffold.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "full_code_restructure",
+      "description": "Reestruturação completa do código Dart/Flutter",
+      "error_patterns": [
+        "Compilation failed",
+        "Could not compile",
+        "error",
+        "Error"
+      ],
+      "context_patterns": [],
+      "type": "restructure",
+      "operations": [
+        {"action": "ensure_imports_top"},
+        {"action": "ensure_material_import"},
+        {"action": "remove_duplicate_imports"},
+        {"action": "ensure_main_function", "class_name": "MyApp"},
+        {"action": "ensure_run_app", "class_name": "MyApp"},
+        {"action": "ensure_const_constructor"},
+        {"action": "ensure_override_annotation"},
+        {"action": "ensure_build_method"},
+        {"action": "ensure_material_app_structure"},
+        {"action": "fix_unmatched_brackets"},
+        {"action": "ensure_semicolons"},
+        {"action": "reorder_sections"}
+      ],
+      "explanation": "Aplica todas as correções estruturais conhecidas em sequência: imports, main(), construtor, override, build(), MaterialApp, brackets, semicolons e reordenação.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "inject_minimal_app_template",
+      "description": "Código muito pequeno ou vazio — injetando template mínimo de app Flutter",
+      "error_patterns": [
+        "Empty file",
+        "No code",
+        "no content",
+        "Target of URI doesn't exist"
+      ],
+      "context_patterns": [],
+      "type": "template_inject",
+      "templates": {
+        "minimal_main": "import 'package:flutter/material.dart';\n\nvoid main() => runApp(const MyApp());\n\nclass MyApp extends StatelessWidget {\n  const MyApp({super.key});\n\n  @override\n  Widget build(BuildContext context) {\n    return MaterialApp(\n      title: 'Flutter App',\n      theme: ThemeData(\n        colorSchemeSeed: Colors.blue,\n        useMaterial3: true,\n      ),\n      home: const MyHomePage(),\n    );\n  }\n}\n\nclass MyHomePage extends StatelessWidget {\n  const MyHomePage({super.key});\n\n  @override\n  Widget build(BuildContext context) {\n    return Scaffold(\n      appBar: AppBar(title: const Text('Home')),\n      body: const Center(child: Text('Hello World')),\n    );\n  }\n}"
+      },
+      "insert_strategy": "replace_if_empty",
+      "explanation": "Códigos muito pequenos ou vazios são substituídos por um template Flutter funcional completo com MaterialApp, tema Material 3 e Scaffold.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "inject_stateful_widget_template",
+      "description": "Injetando boilerplate de StatefulWidget",
+      "error_patterns": [
+        "StatefulWidget",
+        "createState",
+        "State"
+      ],
+      "context_patterns": [],
+      "type": "template_inject",
+      "templates": {
+        "stateful_widget_skeleton": "class MyWidget extends StatefulWidget {\n  const MyWidget({super.key});\n\n  @override\n  State<MyWidget> createState() => _MyWidgetState();\n}\n\nclass _MyWidgetState extends State<MyWidget> {\n  @override\n  Widget build(BuildContext context) {\n    return Container();\n  }\n}"
+      },
+      "insert_strategy": "inject_after_main",
+      "explanation": "Quando um StatefulWidget é necessário, o orquestrador injeta o boilerplate completo com createState() e build().",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "common_imports_injection",
+      "description": "Detectando widgets usados e injetando imports correspondentes",
+      "error_patterns": [
+        "Undefined name",
+        "Undefined class",
+        "isn't a type"
+      ],
+      "context_patterns": [],
+      "type": "structural_fix",
+      "operations": [
+        {"action": "ensure_common_imports"}
+      ],
+      "explanation": "O orquestrador analisa quais widgets/classes são usados no código e adiciona automaticamente os imports necessários (material, cupertino, http, provider, etc.).",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "namespace_not_specified_plugin",
+      "description": "Namespace not specified in plugin build.gradle — AGP 8+ exige namespace",
+      "error_patterns": [
+        "Namespace not specified",
+        "Specify a namespace in the module's build file",
+        "LibraryVariantBuilderImpl",
+        "on_audio_query_android"
+      ],
+      "context_patterns": [
+        "build.gradle"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "O orquestrador já corrige namespace automaticamente. Se falhar, adicione 'namespace' manualmente no build.gradle do plugin problemático com base no package do AndroidManifest.xml.",
+      "explanation": "Android Gradle Plugin 8.0+ exige namespace em todos os módulos. O orquestrador detecta o build.gradle problemático pelo caminho no erro e adiciona namespace baseado no package do AndroidManifest.xml do plugin.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "nvidia_all_models_401",
+      "description": "Chave NVIDIA retorna 401 em todos os modelos de chat — sem permissão de inferência",
+      "error_patterns": [
+        "HTTP 401 com modelo",
+        "401 com modelo",
+        "NVIDIA: nenhum modelo confirmou chat"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "operations": [],
+      "fix_hint": "Chaves NVIDIA nvapi-... podem listar 121 modelos (GET /models) mas retornar 401 em TODOS para chat (POST /chat/completions). Isso significa que a chave NÃO tem permissão de inferência. Gere nova chave em https://build.ngc.nvidia.com/ com permissões de 'inference API' ou troque de provedor. O orquestrador testa automaticamente contra todos os 15 provedores configurados.",
+      "explanation": "A API NVIDIA tem endpoints separados: GET /models (listagem, permissão básica) e POST /chat/completions (inferência, permissão específica). Chaves sem permissão de inferência retornam 401 em TODOS os modelos de chat. O orquestrador detecta este padrão e automaticamente testa outros provedores via _try_key_on_all_providers.",
+      "times_applied": 0,
+      "source": "manual"
+    },
+    {
+      "id": "namespace_in_build_gradle",
+      "description": "Correção automática de namespace ausente em build.gradle de plugin Android",
+      "error_patterns": [
+        "Namespace not specified",
+        "Could not create an instance of type",
+        "LibraryVariantBuilderImpl"
+      ],
+      "context_patterns": [
+        "build.gradle"
+      ],
+      "type": "android_gradle_fix",
+      "operations": [],
+      "fix_hint": "Adiciona namespace no build.gradle do plugin usando o package do AndroidManifest.xml correspondente.",
+      "explanation": "O orquestrador extrai o caminho do build.gradle problemático do stacktrace, lê o AndroidManifest.xml do mesmo diretório para obter o package, e injeta 'namespace' logo após 'android {'.",
       "times_applied": 0,
       "source": "manual"
     }

@@ -505,7 +505,7 @@ def run():
                 self.log.info(f"Tipo detectado: {ptype}")
 
                 dart_code, pubspec_frag, manifest_lines = (
-                    ProjectSourceManager.organize_pasted_code(raw, self.log)
+                    ProjectSourceManager.organize_pasted_code(raw, self.log, kb=self.kb)
                 )
 
                 if not dart_code:
