@@ -43,6 +43,16 @@ def run():
             "Ollama (local)", "Personalizado..."
         ]
 
+        API_KEY_PATTERNS = [
+            (re.compile(r"^AIza"), "Gemini"),
+            (re.compile(r"^sk-ant-"), "Anthropic"),
+            (re.compile(r"^sk-or-"), "OpenRouter"),
+            (re.compile(r"^sk-proj-"), "OpenAI"),
+            (re.compile(r"^sk-"), "OpenAI"),
+            (re.compile(r"^solfce-"), "OpenAI"),
+            (re.compile(r"^sess-"), "OpenAI"),
+        ]
+
         COMMON_ADB_PATHS = [
             Path(os.environ.get("LOCALAPPDATA", "C:\\")) / "Android" / "Sdk" / "platform-tools" / "adb.exe",
             Path(os.environ.get("ANDROID_HOME", "")) / "platform-tools" / "adb.exe",
@@ -74,6 +84,7 @@ def run():
             self.api_provider = "Gemini"
             self.api_key = ""
             self._custom_providers = {}
+            self._auto_validate_after_id = None
 
             self._build_ui()
             self._start_adb_poll()
@@ -96,6 +107,14 @@ def run():
                     return "adb"
             except Exception:
                 pass
+            return None
+
+        @staticmethod
+        def _detect_provider_from_key(key: str):
+            """Identifica o provedor de API pelo padr\u00e3o da chave."""
+            for padrao, provider in BuildOrchestratorGUI.API_KEY_PATTERNS:
+                if padrao.search(key):
+                    return provider
             return None
 
         def _select_adb_path(self):
@@ -208,7 +227,14 @@ def run():
             self.api_key_entry = ctk.CTkEntry(
                 left, placeholder_text="Cole sua chave de API aqui..."
             )
+            self.api_key_entry.bind("<KeyRelease>", self._on_key_change)
+            self.api_key_entry.bind("<<Paste>>", self._on_key_change)
             self.api_key_entry.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
+
+            self.lbl_api_status = ctk.CTkLabel(
+                left, text="", font=ctk.CTkFont(size=11),
+            )
+            self.lbl_api_status.grid(row=r, column=0, padx=10, pady=(0, 2), sticky="w"); r += 1
 
             api_btn_row = ctk.CTkFrame(left, fg_color="transparent")
             api_btn_row.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
@@ -579,6 +605,67 @@ def run():
             ).grid(row=r, column=0, columnspan=2, pady=12)
             dialogo.grid_columnconfigure(1, weight=1)
 
+        def _on_key_change(self, event=None):
+            """Detecta provedor e auto-valida quando a chave \u00e9 colada/digitada."""
+            # Cancela valida\u00e7\u00e3o pendente anterior (debounce 600ms)
+            if self._auto_validate_after_id:
+                self.after_cancel(self._auto_validate_after_id)
+
+            raw = self.api_key_entry.get().strip()
+            if len(raw) < 8:
+                self.lbl_api_status.configure(text="")
+                return
+
+            detected = self._detect_provider_from_key(raw)
+            if detected and detected != self.api_provider:
+                self.api_provider = detected
+                self.api_provider_menu.set(detected)
+                self.log.info(f"Provedor detectado pela chave: {detected}")
+
+            if self.api_provider != "Ollama (local)":
+                self._auto_validate_after_id = self.after(
+                    600, self._auto_validate
+                )
+
+        def _auto_validate(self):
+            """Valida a chave em background sem mostrar popups."""
+            self._auto_validate_after_id = None
+            raw = self.api_key_entry.get().strip()
+            if not raw:
+                return
+            self.api_key = raw
+            threading.Thread(target=self._do_auto_validate, daemon=True).start()
+
+        def _do_auto_validate(self):
+            provider = self.api_provider
+            if provider == "Gemini":
+                from gui.gemini_fixer import GeminiCodeFixer
+                ok, msg = GeminiCodeFixer.validate_key(self.api_key)
+            elif provider == "OpenAI":
+                ok, msg = self._validate_openai_key(self.api_key)
+            elif provider == "Anthropic":
+                ok, msg = self._validate_anthropic_key(self.api_key)
+            elif provider == "OpenRouter":
+                ok, msg = self._validate_openrouter_key(self.api_key)
+            elif provider == "Ollama (local)":
+                ok, msg = self._validate_ollama()
+            elif provider in self._custom_providers:
+                ok, msg = self._validate_custom_provider(self.api_key)
+            else:
+                return
+            self.after(0, self._show_auto_validate_result, ok, msg)
+
+        def _show_auto_validate_result(self, ok: bool, msg: str):
+            if ok:
+                self.lbl_api_status.configure(
+                    text=f"✓ {msg}", text_color="#4CAF50"
+                )
+                self.log.ok(f"{self.api_provider}: {msg}")
+            else:
+                self.lbl_api_status.configure(
+                    text=f"✗ {msg}", text_color="#FF5722"
+                )
+
         def _save_api_key(self):
             key = self.api_key_entry.get().strip()
             if not key:
@@ -617,9 +704,15 @@ def run():
                 ok, msg = False, "Provedor desconhecido"
 
             if ok:
+                self.lbl_api_status.configure(
+                    text=f"✓ {msg}", text_color="#4CAF50"
+                )
                 messagebox.showinfo("Sucesso", msg)
                 self.log.ok(f"{provider}: {msg}")
             else:
+                self.lbl_api_status.configure(
+                    text=f"✗ {msg}", text_color="#FF5722"
+                )
                 messagebox.showerror("Erro", msg)
                 self.log.err(f"{provider}: {msg}")
 
