@@ -303,6 +303,28 @@ class ProjectSourceManager:
         return result
 
     @staticmethod
+    def _merge_pubspec_fragment(project_dir, pubspec_frag, log):
+        """Mescla um fragmento de pubspec (YAML) no pubspec.yaml existente."""
+        pubspec_path = project_dir / "pubspec.yaml"
+        if not pubspec_path.exists():
+            log.warn("pubspec.yaml n\u00e3o encontrado para mesclar")
+            return
+        current = pubspec_path.read_text(encoding="utf-8")
+        if not pubspec_frag or pubspec_frag.strip() in current:
+            return
+        # Extrai as se\u00e7\u00f5es do fragmento (dependencies:, flutter:, etc.)
+        added = []
+        for line in pubspec_frag.split("\n"):
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                if stripped not in current and ":" in stripped:
+                    current += "\n" + line
+                    added.append(stripped.split(":")[0])
+        if added:
+            pubspec_path.write_text(current, encoding="utf-8")
+            log.ok(f"Se\u00e7\u00f5es mescladas do pubspec: {', '.join(added)}")
+
+    @staticmethod
     def inject_deps(code, project_dir, log, kb=None):
         """Detecta imports no c\u00f3digo e injeta depend\u00eancias no pubspec.yaml."""
         imports = re.findall(r"import\s+'package:([^/]+)/", code)

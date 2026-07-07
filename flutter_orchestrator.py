@@ -116,6 +116,7 @@ class FlutterBuildOrchestrator:
         self.flutter_cmd = "flutter"
         self.install_dir = Path.home() / ".flutter_auto"
         self._cancelled = False
+        self.last_apk_path = None
 
     def cancel(self):
         self._cancelled = True
@@ -476,6 +477,7 @@ class FlutterBuildOrchestrator:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = self.output_dir / f"app_{timestamp}.apk"
         shutil.copy2(apk_path, output_path)
+        self.last_apk_path = output_path
         self.log(f"Copiado: {output_path}", "SUCCESS")
         return output_path
 
@@ -569,6 +571,7 @@ class FlutterBuildOrchestrator:
                 self.generate_build_report(apk_path, False)
                 return False
 
+        self.last_apk_path = apk_path
         ok = apk_path is not None
         self.generate_build_report(apk_path, ok)
         if ok:
