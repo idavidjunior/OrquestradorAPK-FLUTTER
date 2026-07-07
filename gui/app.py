@@ -871,10 +871,14 @@ def run():
                     f"({'Release' if release else 'Debug'})"
                 )
 
+                kb_path = str(Path(__file__).resolve().parent.parent / "known_fixes.json")
                 self.orch = FlutterBuildOrchestrator(
                     project_path=str(self.project_dir),
                     auto_install=auto_install,
                     log_callback=self._on_log,
+                    api_provider=self.api_provider if self.api_key else None,
+                    api_key=self.api_key or None,
+                    kb_path=kb_path,
                 )
                 success = self.orch.orchestrate(
                     skip_tests=skip,

@@ -5,6 +5,7 @@ Automatiza todo o processo de build de aplicativos Flutter, gerando APK pronto p
 Unifica as funcionalidades dos dois scripts anteriores com auto-install e corre\u00e7\u00f5es autom\u00e1ticas.
 """
 
+import hashlib
 import os
 import sys
 import subprocess
@@ -103,10 +104,42 @@ def _flutter_download_url() -> str:
 class FlutterBuildOrchestrator:
     """Orquestrador de builds Flutter."""
 
+    AI_PROVIDER_CONFIG = {
+        "Gemini":    {"type": "gemini",    "url": None,
+                      "model": "gemini-2.0-flash"},
+        "OpenAI":    {"type": "openai",    "url": "https://api.openai.com/v1",
+                      "model": "gpt-4o-mini"},
+        "Anthropic": {"type": "anthropic","url": None,
+                      "model": "claude-3-haiku-20240307"},
+        "DeepSeek":  {"type": "openai",    "url": "https://api.deepseek.com/v1",
+                      "model": "deepseek-chat"},
+        "Mistral AI":{"type": "openai",    "url": "https://api.mistral.ai/v1",
+                      "model": "mistral-large-latest"},
+        "Groq":      {"type": "openai",    "url": "https://api.groq.com/openai/v1",
+                      "model": "llama-3.3-70b-versatile"},
+        "Together AI":{"type": "openai",   "url": "https://api.together.xyz/v1",
+                      "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"},
+        "NVIDIA":    {"type": "openai",    "url": "https://integrate.api.nvidia.com/v1",
+                      "model": "meta/llama-3.1-8b-instruct"},
+        "Perplexity":{"type": "openai",    "url": "https://api.perplexity.ai",
+                      "model": "sonar-pro"},
+        "Cohere":    {"type": "openai",    "url": "https://api.cohere.ai/v1",
+                      "model": "command-r-plus"},
+        "xAI (Grok)":{"type": "openai",    "url": "https://api.x.ai/v1",
+                      "model": "grok-2-latest"},
+        "AI21 Labs": {"type": "openai",    "url": "https://api.ai21.com/studio/v1",
+                      "model": "jamba-1.5-mini"},
+        "OpenRouter":{"type": "openai",    "url": "https://openrouter.ai/api/v1",
+                      "model": "openai/gpt-4o-mini"},
+    }
+
     def __init__(self, project_path: str,
                  output_dir: str = "build_output",
                  auto_install: bool = False,
-                 log_callback=None):
+                 log_callback=None,
+                 api_provider: str = None,
+                 api_key: str = None,
+                 kb_path: str = None):
         self.project_path = Path(project_path).resolve()
         if Path(output_dir).is_absolute():
             self.output_dir = Path(output_dir)
@@ -120,6 +153,12 @@ class FlutterBuildOrchestrator:
         self.install_dir = Path.home() / ".flutter_auto"
         self._cancelled = False
         self.last_apk_path = None
+        self.api_provider = api_provider
+        self.api_key = api_key
+        self.kb_path = Path(kb_path) if kb_path else None
+        self._last_errors = []
+        self._last_fix_applied = None
+        self._fix_cache = {}
 
     def cancel(self):
         self._cancelled = True
@@ -448,6 +487,11 @@ class FlutterBuildOrchestrator:
                 self.log("APK compilado com sucesso", "SUCCESS")
                 return True
             self.log(f"Erro: {result.stderr[:500]}", "ERROR")
+            # Tenta corre\u00e7\u00e3o via IA se configurada
+            if self.api_key and self.api_provider:
+                self.log("Tentando corre\u00e7\u00e3o autom\u00e1tica via IA...", "INFO")
+                if self._fix_errors_and_retry(result.stderr, release, build_number):
+                    return True
             return False
         except subprocess.TimeoutExpired:
             self.log("Timeout na compila\u00e7\u00e3o", "ERROR")
@@ -488,6 +532,7 @@ class FlutterBuildOrchestrator:
 
     def generate_build_report(self, apk_path: Optional[Path], success: bool):
         self.log("Gerando relat\u00f3rio...", "STEP")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         report = {
             "build_info": {
                 "project_path": str(self.project_path),
@@ -531,6 +576,205 @@ class FlutterBuildOrchestrator:
             print(f"APK: {apk_path.name} ({report['apk_info']['size_mb']} MB)")
         print(f"Output: {self.output_dir}")
         print(f"{'='*60}")
+
+    # ── AI auto-correction ────────────────────────────────────────────
+
+    def _ai_fix_code(self, errors: str, code: str) -> Optional[str]:
+        """Chama a API de IA para corrigir o c\u00f3digo com base nos erros."""
+        if not self.api_key or not self.api_provider:
+            return None
+
+        cfg = self.AI_PROVIDER_CONFIG.get(self.api_provider)
+        if not cfg:
+            self.log(f"Provedor IA n\u00e3o configurado: {self.api_provider}", "WARNING")
+            return None
+
+        prompt = (
+            "Voc\u00ea \u00e9 um especialista em Flutter/Dart.\n"
+            "O c\u00f3digo abaixo falhou ao compilar com os erros listados.\n\n"
+            f"ERROS DO COMPILADOR:\n{errors[:2000]}\n\n"
+            "C\u00d3DIGO DART (main.dart):\n"
+            f"```dart\n{code[:4000]}\n```\n\n"
+            "TAREFA:\n"
+            "1. Analise cada erro e corrija o c\u00f3digo\n"
+            "2. Mantenha a l\u00f3gica e funcionalidade originais\n"
+            "3. Corrija apenas o necess\u00e1rio para compilar\n"
+            "4. Retorne APENAS o c\u00f3digo Dart corrigido, sem explica\u00e7\u00f5es\n"
+            "5. N\u00e3o inclua marcadores de c\u00f3digo na resposta\n"
+            "IMPORTANTE: Retorne SOMENTE o c\u00f3digo Dart puro."
+        )
+
+        self.log(f"Enviando erros para {self.api_provider}...", "INFO")
+
+        try:
+            if cfg["type"] == "gemini":
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/"
+                    f"models/{cfg['model']}:generateContent"
+                    f"?key={self.api_key}"
+                )
+                payload = json.dumps({
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.1, "maxOutputTokens": 8192},
+                })
+                req = Request(url, data=payload.encode(),
+                              headers={"Content-Type": "application/json"})
+
+            elif cfg["type"] == "anthropic":
+                url = "https://api.anthropic.com/v1/messages"
+                payload = json.dumps({
+                    "model": cfg["model"],
+                    "max_tokens": 4096,
+                    "messages": [{"role": "user", "content": prompt}],
+                })
+                req = Request(url, data=payload.encode(), method="POST",
+                              headers={
+                                  "Content-Type": "application/json",
+                                  "x-api-key": self.api_key,
+                                  "anthropic-version": "2023-06-01",
+                              })
+
+            else:  # openai-compatible
+                url = f"{cfg['url'].rstrip('/')}/chat/completions"
+                payload = json.dumps({
+                    "model": cfg["model"],
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 4096,
+                })
+                req = Request(url, data=payload.encode(), method="POST",
+                              headers={
+                                  "Content-Type": "application/json",
+                                  "Authorization": f"Bearer {self.api_key}",
+                              })
+
+            with urlopen(req, timeout=90) as r:
+                resp = json.loads(r.read())
+
+            if cfg["type"] == "gemini":
+                text = (resp.get("candidates", [{}])[0]
+                        .get("content", {})
+                        .get("parts", [{}])[0]
+                        .get("text", ""))
+            elif cfg["type"] == "anthropic":
+                text = (resp.get("content", [{}])[0]
+                        .get("text", ""))
+            else:
+                text = (resp.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", ""))
+
+            fixed = text.strip()
+            if fixed.startswith("```"):
+                fixed = "\n".join(
+                    l for l in fixed.split("\n")
+                    if not l.strip().startswith("```")
+                ).strip()
+            if len(fixed) > 50:
+                self.log(f"IA retornou {len(fixed)} caracteres", "SUCCESS")
+                return fixed
+            self.log("IA retornou conte\u00fado muito curto", "WARNING")
+            return None
+
+        except URLError as e:
+            self.log(f"Erro de conex\u00e3o com IA: {e.reason[:100]}", "ERROR")
+        except Exception as e:
+            self.log(f"Erro na chamada IA: {str(e)[:150]}", "ERROR")
+        return None
+
+    def _fix_errors_and_retry(self, stderr: str, release: bool,
+                               build_number: Optional[str]) -> bool:
+        """Tenta corrigir erros com IA e recompilar."""
+        errors = stderr[:3000]
+        if not errors.strip():
+            return False
+
+        main_dart = self.project_path / "lib" / "main.dart"
+        if not main_dart.exists():
+            self.log("main.dart n\u00e3o encontrado para corre\u00e7\u00e3o", "ERROR")
+            return False
+
+        code = main_dart.read_text(encoding="utf-8")
+
+        # Verifica cache de corre\u00e7\u00e3o para este erro
+        cache_key = hashlib.md5((errors[:500] + code[:500]).encode()).hexdigest()
+        if cache_key in self._fix_cache:
+            self.log("Usando corre\u00e7\u00e3o em cache", "INFO")
+            main_dart.write_text(self._fix_cache[cache_key], encoding="utf-8")
+            return self._retry_build(release, build_number)
+
+        fixed = self._ai_fix_code(errors, code)
+        if not fixed:
+            return False
+
+        main_dart.write_text(fixed, encoding="utf-8")
+        self._fix_cache[cache_key] = fixed
+        self._last_errors = errors[:500]
+        self._last_fix_applied = True
+
+        ok = self._retry_build(release, build_number)
+        if ok:
+            self._learn_from_success(errors[:500], fixed[:500])
+        return ok
+
+    def _retry_build(self, release: bool,
+                     build_number: Optional[str]) -> bool:
+        """Reexecuta flutter pub get + flutter build apk."""
+        try:
+            subprocess.run(
+                [self.flutter_cmd, "pub", "get"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=120,
+            )
+        except Exception:
+            pass
+        cmd = [self.flutter_cmd, "build", "apk"]
+        if release:
+            cmd.append("--release")
+        if build_number:
+            cmd.extend(["--build-number", build_number])
+        try:
+            r = subprocess.run(
+                cmd, cwd=self.project_path,
+                capture_output=True, text=True, timeout=1800,
+            )
+            if r.returncode == 0:
+                self.log("APK compilado com sucesso ap\u00f3s corre\u00e7\u00e3o IA", "SUCCESS")
+                return True
+            self.log(f"Ainda com erros ap\u00f3s corre\u00e7\u00e3o: {r.stderr[:300]}", "WARNING")
+            return False
+        except Exception as e:
+            self.log(f"Erro no retry: {e}", "ERROR")
+            return False
+
+    def _learn_from_success(self, errors: str, fix_snippet: str):
+        """Persiste o par erro+corre\u00e7\u00e3o no known_fixes.json."""
+        if not self.kb_path:
+            return
+        try:
+            fixes = []
+            if self.kb_path.exists():
+                fixes = json.loads(self.kb_path.read_text(encoding="utf-8"))
+            entry = {
+                "error_pattern": errors[:200],
+                "fix_preview": fix_snippet[:200],
+                "provider": self.api_provider,
+                "timestamp": datetime.now().isoformat(),
+                "success_count": 1,
+            }
+            # Evita duplicatas: se mesmo pattern j\u00e1 existe, incrementa contagem
+            for existing in fixes:
+                if existing["error_pattern"] == entry["error_pattern"]:
+                    existing["success_count"] = existing.get("success_count", 1) + 1
+                    existing["timestamp"] = entry["timestamp"]
+                    break
+            else:
+                fixes.append(entry)
+            self.kb_path.write_text(
+                json.dumps(fixes, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            self.log("Aprendizado salvo em known_fixes.json", "SUCCESS")
+        except Exception as e:
+            self.log(f"Erro ao salvar aprendizado: {e}", "WARNING")
 
     # ── Pipeline ───────────────────────────────────────────────────────
 
