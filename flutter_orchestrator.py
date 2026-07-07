@@ -108,7 +108,10 @@ class FlutterBuildOrchestrator:
                  auto_install: bool = False,
                  log_callback=None):
         self.project_path = Path(project_path).resolve()
-        self.output_dir = Path(output_dir).resolve()
+        if Path(output_dir).is_absolute():
+            self.output_dir = Path(output_dir)
+        else:
+            self.output_dir = (self.project_path / output_dir).resolve()
         self.auto_install = auto_install
         self._log_callback = log_callback
         self.build_log: List[Dict] = []

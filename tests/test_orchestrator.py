@@ -40,7 +40,7 @@ def test_orchestrator_initialization():
 
     orch = FlutterBuildOrchestrator(project_path="/tmp/test")
     assert orch.project_path == Path("/tmp/test").resolve()
-    assert orch.output_dir == Path("build_output").resolve()
+    assert orch.output_dir == Path("/tmp/test/build_output").resolve()
     assert orch.build_log == []
     assert orch.start_time is not None
 
