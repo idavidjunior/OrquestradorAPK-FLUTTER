@@ -6,8 +6,9 @@ Flutter Build Orchestrator — Interface Gr\u00e1fica
 Features:
   - Selecionar pasta local / Clonar GitHub / Colar c\u00f3digo (detec\u00e7\u00e3o inteligente)
   - Build com FlutterBuildOrchestrator (log redirecionado via log_callback)
-  - Detec\u00e7\u00e3o de dispositivo Android via ADB + instala\u00e7\u00e3o autom\u00e1tica
+  - Detec\u00e7\u00e3o autom\u00e1tica de dispositivo Android via ADB + instala\u00e7\u00e3o autom\u00e1tica
   - Abertura r\u00e1pida da pasta de sa\u00edda do APK compilado
+  - M\u00faltiplas fontes de API (Gemini, OpenAI, Anthropic, OpenRouter)
 
 customtkinter \u00e9 lazy (importado apenas dentro de run()).
 """
@@ -37,6 +38,8 @@ def run():
     class BuildOrchestratorGUI(ctk.CTk):
         """Janela principal do Flutter Build Orchestrator."""
 
+        API_PROVIDERS = ["Gemini", "OpenAI", "Anthropic", "OpenRouter", "Ollama (local)"]
+
         def __init__(self):
             super().__init__()
             self.title("Flutter Build Orchestrator")
@@ -46,10 +49,19 @@ def run():
             self.project_dir = None
             self.orch = None
             self.build_running = False
+
+            # ADB state
             self.adb_available = False
             self.adb_device = ""
+            self._adb_prev_state = None  # None / True / False
+            self._adb_poll_active = True
+
+            # API state
+            self.api_provider = "Gemini"
+            self.api_key = ""
 
             self._build_ui()
+            self._start_adb_poll()
             self.log.ok("GUI pronta \u2014 selecione/cole um projeto para come\u00e7ar")
 
         # ==================================================================
@@ -126,16 +138,50 @@ def run():
             )
             self.btn_clear_paste.grid(row=0, column=1, padx=(2, 0), sticky="ew")
 
-            # -- Gemini --
-            ctk.CTkLabel(left, text="Chave Gemini (opcional)").grid(
-                row=r, column=0, padx=10, pady=(10, 2), sticky="w"); r += 1
-            self.gemini_entry = ctk.CTkEntry(left, placeholder_text="API Key...")
-            self.gemini_entry.grid(row=r, column=0, padx=10, pady=(0, 2), sticky="ew"); r += 1
-            self.btn_gemini = ctk.CTkButton(
-                left, text="Validar Chave",
-                command=self._validate_gemini_key, width=100,
+            # -- Fonte de API --
+            api_lbl = ctk.CTkLabel(
+                left, text="Fonte de API (corre\u00e7\u00e3o inteligente)",
+                font=ctk.CTkFont(size=14, weight="bold"),
             )
-            self.btn_gemini.grid(row=r, column=0, padx=10, pady=(0, 5), sticky="w"); r += 1
+            api_lbl.grid(row=r, column=0, padx=10, pady=(10, 2), sticky="w"); r += 1
+
+            provider_frame = ctk.CTkFrame(left, fg_color="transparent")
+            provider_frame.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
+            provider_frame.grid_columnconfigure(0, weight=1)
+            provider_frame.grid_columnconfigure(1, weight=2)
+
+            ctk.CTkLabel(provider_frame, text="Provedor:").grid(
+                row=0, column=0, sticky="w", padx=(0, 5)
+            )
+            self.api_provider_menu = ctk.CTkOptionMenu(
+                provider_frame,
+                values=self.API_PROVIDERS,
+                command=self._on_api_provider_change,
+            )
+            self.api_provider_menu.grid(row=0, column=1, sticky="ew")
+            self.api_provider_menu.set("Gemini")
+
+            self.api_key_entry = ctk.CTkEntry(
+                left, placeholder_text="Cole sua chave de API aqui..."
+            )
+            self.api_key_entry.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
+
+            api_btn_row = ctk.CTkFrame(left, fg_color="transparent")
+            api_btn_row.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
+            api_btn_row.grid_columnconfigure(0, weight=1)
+            api_btn_row.grid_columnconfigure(1, weight=1)
+
+            self.btn_validate_api = ctk.CTkButton(
+                api_btn_row, text="Validar Chave",
+                command=self._validate_api_key,
+            )
+            self.btn_validate_api.grid(row=0, column=0, padx=(0, 2), sticky="ew")
+
+            self.btn_save_api = ctk.CTkButton(
+                api_btn_row, text="Salvar", fg_color="#555",
+                command=self._save_api_key,
+            )
+            self.btn_save_api.grid(row=0, column=1, padx=(2, 0), sticky="ew")
 
             # -- A\u00e7\u00f5es --
             ctk.CTkLabel(
@@ -181,14 +227,8 @@ def run():
             util_frame = ctk.CTkFrame(left, fg_color="transparent")
             util_frame.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
 
-            self.btn_detect_adb = ctk.CTkButton(
-                util_frame, text="Detectar Dispositivo USB",
-                command=self._detect_adb,
-            )
-            self.btn_detect_adb.pack(fill="x", pady=2)
-
             self.lbl_adb = ctk.CTkLabel(
-                util_frame, text="", font=ctk.CTkFont(size=11),
+                util_frame, text="ADB: aguardando...", font=ctk.CTkFont(size=11),
             )
             self.lbl_adb.pack(fill="x", pady=1)
 
@@ -280,21 +320,16 @@ def run():
 
         def _detect_project_type(self, raw: str) -> str:
             """Tenta identificar o tipo de projeto colado."""
-            # 1. Projeto Flutter completo (pubspec.yaml embutido)
             if re.search(r"^name:\s*\S", raw, re.M) and re.search(
                 r"^dependencies:", raw, re.M
             ):
                 return "flutter_full"
-            # 2. C\u00f3digo Flutter/Dart com import de material
             if re.search(r"package:flutter", raw):
                 return "flutter_app"
-            # 3. AndroidManifest.xml
             if "<manifest" in raw or "<uses-permission" in raw:
                 return "android_manifest"
-            # 4. pubspec.yaml puro
             if re.search(r"^name:\s*\S", raw, re.M):
                 return "pubspec_only"
-            # 5. Dart gen\u00e9rico
             if re.search(r"(import|void main|class\s+\w+|final\s+\w+)", raw):
                 return "dart_generic"
             return "unknown"
@@ -305,7 +340,6 @@ def run():
                 ptype = self._detect_project_type(raw)
                 self.log.info(f"Tipo detectado: {ptype}")
 
-                # Usa o ProjectSourceManager para separar e organizar
                 dart_code, pubspec_frag, manifest_lines = (
                     ProjectSourceManager.organize_pasted_code(raw, self.log)
                 )
@@ -314,12 +348,10 @@ def run():
                     self.log.err("N\u00e3o foi poss\u00edvel extrair c\u00f3digo Dart v\u00e1lido")
                     return
 
-                # Cria projeto tempor\u00e1rio
                 tmp_dir = Path(tempfile.mkdtemp(prefix="flutter_build_"))
                 project_dir = tmp_dir / "app"
                 self.log.info(f"Criando projeto em: {project_dir}")
 
-                # Tenta usar flutter create para gerar base
                 try:
                     subprocess.run(
                         ["flutter", "create", "--project-name", "app",
@@ -333,30 +365,25 @@ def run():
                     (project_dir / "lib").mkdir(exist_ok=True)
                     self._write_minimal_project(project_dir)
 
-                # Sobrescreve main.dart com o c\u00f3digo colado
                 lib_main = project_dir / "lib" / "main.dart"
                 lib_main.write_text(dart_code, encoding="utf-8")
 
                 self.log.info(f"main.dart: {len(dart_code.splitlines())} linhas")
 
-                # Mescla pubspec se veio colado junto
                 if pubspec_frag:
                     ProjectSourceManager._merge_pubspec_fragment(
                         project_dir, pubspec_frag, self.log
                     )
 
-                # Injeta permiss\u00f5es se veio AndroidManifest
                 if manifest_lines:
                     ProjectSourceManager.inject_permissions(
                         project_dir, manifest_lines, self.log
                     )
 
-                # Detecta e injeta depend\u00eancias
                 ProjectSourceManager.inject_deps(
                     dart_code, project_dir, self.log, kb=self.kb
                 )
 
-                # Valida e corrige pubspec
                 ProjectSourceManager.validate_and_fix_pubspec(
                     project_dir, self.log
                 )
@@ -378,7 +405,6 @@ def run():
             )
             (project_dir / "test").mkdir(exist_ok=True)
 
-            # pubspec.yaml m\u00ednimo
             (project_dir / "pubspec.yaml").write_text(
                 "name: app\n"
                 "description: App gerado automaticamente\n"
@@ -392,7 +418,6 @@ def run():
                 "  uses-material-design: true\n",
                 encoding="utf-8",
             )
-            # AndroidManifest m\u00ednimo
             manifest = (
                 project_dir / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
             )
@@ -416,7 +441,6 @@ def run():
                 '</manifest>\n',
                 encoding="utf-8",
             )
-            # build.gradle m\u00ednimo (app level)
             build_gradle = project_dir / "android" / "app" / "build.gradle"
             build_gradle.write_text(
                 "plugins {\n"
@@ -442,21 +466,124 @@ def run():
             )
 
         # ==================================================================
-        #  Handlers — Gemini
+        #  Handlers — API Key (m\u00faltiplas fontes)
         # ==================================================================
 
-        def _validate_gemini_key(self):
-            key = self.gemini_entry.get().strip()
+        def _on_api_provider_change(self, choice: str):
+            self.api_provider = choice
+            self.log.info(f"Provedor de API selecionado: {choice}")
+
+        def _save_api_key(self):
+            key = self.api_key_entry.get().strip()
             if not key:
                 messagebox.showwarning("Aviso", "Digite uma chave primeiro")
                 return
-            from gui.gemini_fixer import GeminiCodeFixer
-            ok, msg = GeminiCodeFixer.validate_key(key)
+            self.api_key = key
+            self.log.ok(
+                f"Chave salva para {self.api_provider} "
+                f"(termina em ...{key[-4:]})"
+            )
+
+        def _validate_api_key(self):
+            key = self.api_key_entry.get().strip()
+            if not key:
+                messagebox.showwarning("Aviso", "Digite uma chave primeiro")
+                return
+            self.api_key = key
+
+            provider = self.api_provider
+            self.log.info(f"Validando chave {provider}...")
+
+            if provider == "Gemini":
+                from gui.gemini_fixer import GeminiCodeFixer
+                ok, msg = GeminiCodeFixer.validate_key(key)
+            elif provider == "OpenAI":
+                ok, msg = self._validate_openai_key(key)
+            elif provider == "Anthropic":
+                ok, msg = self._validate_anthropic_key(key)
+            elif provider == "OpenRouter":
+                ok, msg = self._validate_openrouter_key(key)
+            elif provider == "Ollama (local)":
+                ok, msg = self._validate_ollama()
+            else:
+                ok, msg = False, "Provedor desconhecido"
+
             if ok:
                 messagebox.showinfo("Sucesso", msg)
-                self.log.ok(f"Gemini: {msg}")
+                self.log.ok(f"{provider}: {msg}")
             else:
                 messagebox.showerror("Erro", msg)
+                self.log.err(f"{provider}: {msg}")
+
+        def _validate_openai_key(self, key: str):
+            try:
+                req = __import__("urllib.request", fromlist=["Request", "urlopen"]).Request(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+                with __import__("urllib.request").urlopen(req, timeout=10) as r:
+                    data = __import__("json").loads(r.read())
+                models = data.get("data", [])
+                return True, f"OK \u2014 {len(models)} modelos dispon\u00edveis"
+            except Exception as e:
+                err = str(e)
+                if "401" in err:
+                    return False, "Chave inv\u00e1lida"
+                return False, f"Erro: {err}"
+
+        def _validate_anthropic_key(self, key: str):
+            try:
+                req = __import__("urllib.request", fromlist=["Request"]).Request(
+                    "https://api.anthropic.com/v1/messages",
+                    data=__import__("json").dumps(
+                        {"model": "claude-3-haiku-20240307",
+                         "max_tokens": 10,
+                         "messages": [{"role": "user", "content": "hi"}]}
+                    ).encode(),
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-api-key": key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                    method="POST",
+                )
+                with __import__("urllib.request").urlopen(req, timeout=15) as r:
+                    return True, "Chave v\u00e1lida"
+            except Exception as e:
+                err = str(e)
+                if "401" in err or "invalid" in err.lower():
+                    return False, "Chave inv\u00e1lida"
+                if "403" in err:
+                    return False, "Sem permiss\u00e3o"
+                return False, f"Erro: {err}"
+
+        def _validate_openrouter_key(self, key: str):
+            try:
+                req = __import__("urllib.request", fromlist=["Request"]).Request(
+                    "https://openrouter.ai/api/v1/auth/key",
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+                with __import__("urllib.request").urlopen(req, timeout=10) as r:
+                    return True, "Chave v\u00e1lida"
+            except Exception as e:
+                err = str(e)
+                if "401" in err:
+                    return False, "Chave inv\u00e1lida"
+                return False, f"Erro: {err}"
+
+        def _validate_ollama(self):
+            try:
+                req = __import__("urllib.request", fromlist=["Request"]).Request(
+                    "http://localhost:11434/api/tags"
+                )
+                with __import__("urllib.request").urlopen(req, timeout=5) as r:
+                    data = __import__("json").loads(r.read())
+                models = data.get("models", [])
+                if models:
+                    return True, f"OK \u2014 {len(models)} modelos dispon\u00edveis"
+                return True, "Ollama rodando (sem modelos)"
+            except Exception:
+                return False, "Ollama n\u00e3o encontrado em localhost:11434"
 
         # ==================================================================
         #  Handlers — Build
@@ -494,7 +621,6 @@ def run():
                     debug=not release,
                 )
 
-                # P\u00f3s-build: instalar via ADB se solicitado
                 if success and self.check_install_adb.get() and self.adb_available:
                     self._install_via_adb()
 
@@ -525,57 +651,82 @@ def run():
             self.btn_pasta.configure(state=est)
             self.btn_github.configure(state=est)
             self.btn_analyze.configure(state=est)
-            self.btn_detect_adb.configure(state=est)
             self.btn_open_output.configure(state=est)
+            self.btn_validate_api.configure(state=est)
+            self.btn_save_api.configure(state=est)
             self.btn_stop.configure(state="normal" if running else "disabled")
 
         # ==================================================================
-        #  Handlers — ADB
+        #  ADB — detec\u00e7\u00e3o autom\u00e1tica (polling a cada 3s)
         # ==================================================================
 
-        def _detect_adb(self):
-            threading.Thread(target=self._do_detect_adb, daemon=True).start()
+        def _start_adb_poll(self):
+            self._adb_poll_active = True
+            self._do_adb_poll()
 
-        def _do_detect_adb(self):
-            self.log.info("Detectando dispositivos Android via ADB...")
+        def _stop_adb_poll(self):
+            self._adb_poll_active = False
+
+        def _do_adb_poll(self):
+            if not self._adb_poll_active:
+                return
+            threading.Thread(target=self._run_adb_check, daemon=True).start()
+
+        def _run_adb_check(self):
+            result = {"available": False, "device": "", "error": None}
             try:
                 r = subprocess.run(
                     ["adb", "devices"],
-                    capture_output=True, text=True, timeout=15,
+                    capture_output=True, text=True, timeout=10,
                 )
                 lines = r.stdout.strip().split("\n")
                 devices = [
                     l.split("\t")[0]
-                    for l in lines[1:]  # skip "List of devices attached"
+                    for l in lines[1:]
                     if l.strip() and "device" in l and "unauthorized" not in l
                 ]
-                if devices:
-                    self.adb_available = True
-                    self.adb_device = devices[0]
-                    self.lbl_adb.configure(
-                        text=f"Dispositivo: {devices[0][:30]}",
-                        text_color="#4CAF50",
-                    )
-                    self.log.ok(f"Dispositivo detectado: {devices[0]}")
-                else:
-                    self.adb_available = False
-                    self.adb_device = ""
-                    self.lbl_adb.configure(
-                        text="Nenhum dispositivo encontrado",
-                        text_color="#FF5722",
-                    )
-                    self.log.warn("Nenhum dispositivo Android via USB detectado")
+                result["available"] = len(devices) > 0
+                result["device"] = devices[0] if devices else ""
             except FileNotFoundError:
-                self.adb_available = False
-                self.lbl_adb.configure(
-                    text="ADB n\u00e3o encontrado no PATH",
-                    text_color="#FF5722",
-                )
-                self.log.err("ADB n\u00e3o encontrado. Instale o Android SDK.")
+                result["error"] = "ADB n\u00e3o encontrado no PATH"
             except Exception as e:
+                result["error"] = str(e)[:60]
+            # Volta para a thread principal para atualizar UI
+            self.after(0, self._update_adb_ui, result)
+
+        def _update_adb_ui(self, result):
+            state = result["available"] if not result["error"] else "error"
+            if result["error"]:
                 self.adb_available = False
-                self.lbl_adb.configure(text=f"Erro ADB: {e}", text_color="#FF5722")
-                self.log.err(f"Erro ao detectar ADB: {e}")
+                self.adb_device = ""
+                self.lbl_adb.configure(
+                    text=f"ADB: {result['error']}", text_color="#FF5722"
+                )
+                if self._adb_prev_state != "error":
+                    self.log.err(f"ADB: {result['error']}")
+                    self._adb_prev_state = "error"
+            elif result["available"]:
+                self.adb_available = True
+                self.adb_device = result["device"]
+                self.lbl_adb.configure(
+                    text=f"Dispositivo: {result['device'][:35]}",
+                    text_color="#4CAF50",
+                )
+                if self._adb_prev_state is not True:
+                    self.log.ok(f"Dispositivo ADB detectado: {result['device']}")
+                    self._adb_prev_state = True
+            else:
+                self.adb_available = False
+                self.adb_device = ""
+                self.lbl_adb.configure(
+                    text="Nenhum dispositivo conectado", text_color="#888"
+                )
+                if self._adb_prev_state is not False:
+                    self.log.info("ADB: nenhum dispositivo conectado")
+                    self._adb_prev_state = False
+
+            # Reagenda
+            self.after(3000, self._do_adb_poll)
 
         def _install_via_adb(self):
             apk = self.orch.last_apk_path if self.orch else None
