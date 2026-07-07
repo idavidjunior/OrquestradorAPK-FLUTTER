@@ -403,9 +403,8 @@ def run():
                 if key:
                     self.api_key = key
                     self.api_key_entry.insert(0, key)
-                self._auto_selected_models.update(
-                    data.get("auto_selected_models", {})
-                )
+                # N\u00e3o restaura modelos em cache — ser\u00e3o re-descobertos
+                # na pr\u00f3xima valida\u00e7\u00e3o (evita modelo quebrado de sess\u00e3o anterior)
                 proj = data.get("last_project_dir", "")
                 if proj and Path(proj).exists():
                     self.project_dir = Path(proj)
@@ -873,7 +872,7 @@ def run():
                 from gui.gemini_fixer import GeminiCodeFixer
                 ok, msg = GeminiCodeFixer.validate_key(self.api_key)
                 if ok:
-                    working = self._auto_select_model("Gemini", self.api_key)
+                    working = self._auto_select_model("Gemini", self.api_key, force=True)
                     if working:
                         msg = f"OK \u2014 modelo: {working}"
             elif provider == "OpenAI":
@@ -930,7 +929,7 @@ def run():
                 from gui.gemini_fixer import GeminiCodeFixer
                 ok, msg = GeminiCodeFixer.validate_key(key)
                 if ok:
-                    working = self._auto_select_model("Gemini", key)
+                    working = self._auto_select_model("Gemini", key, force=True)
                     if working:
                         msg = f"OK \u2014 modelo: {working}"
             elif provider == "OpenAI":
@@ -1098,14 +1097,16 @@ def run():
             except Exception:
                 return False
 
-        def _auto_select_model(self, provider: str, key: str) -> Optional[str]:
+        def _auto_select_model(self, provider: str, key: str,
+                                force: bool = False) -> Optional[str]:
             """Auto-seleciona modelo funcional para QUALQUER provedor."""
             if not key:
                 return None
 
-            # Se j\u00e1 foi selecionado antes e n\u00e3o est\u00e1 na blacklist, mant\u00e9m
+            # Se j\u00e1 foi selecionado antes e n\u00e3o est\u00e1 na blacklist,
+            # mant\u00e9m (a menos que force=True, ex: nova valida\u00e7\u00e3o)
             cached = self._auto_selected_models.get(provider)
-            if cached and cached not in self._bad_models:
+            if cached and cached not in self._bad_models and not force:
                 return cached
 
             models = self._list_models_for_provider(provider, key)
@@ -1168,7 +1169,7 @@ def run():
                 resp_status = 0
                 with urllib.request.urlopen(req, timeout=10) as r:
                     resp_status = r.status
-                working = self._auto_select_model(provider, key)
+                working = self._auto_select_model(provider, key, force=True)
                 if working:
                     return True, (f"OK \u2014 modelo: {working}")
                 return True, f"Conectado (HTTP {resp_status})"
@@ -1195,7 +1196,7 @@ def run():
                     method="POST",
                 )
                 with urllib.request.urlopen(req, timeout=15) as r:
-                    working = self._auto_select_model("Anthropic", key)
+                    working = self._auto_select_model("Anthropic", key, force=True)
                     if working:
                         return True, f"Chave v\u00e1lida, modelo: {working}"
                     return True, "Chave v\u00e1lida"
@@ -1215,7 +1216,7 @@ def run():
                     headers={"Authorization": f"Bearer {key}"},
                 )
                 with urllib.request.urlopen(req, timeout=10) as r:
-                    working = self._auto_select_model("OpenRouter", key)
+                    working = self._auto_select_model("OpenRouter", key, force=True)
                     if working:
                         return True, f"Chave v\u00e1lida, modelo: {working}"
                     return True, "Chave v\u00e1lida"
@@ -1228,7 +1229,7 @@ def run():
 
         def _validate_ollama(self):
             try:
-                working = self._auto_select_model("Ollama (local)", "")
+                working = self._auto_select_model("Ollama (local)", "", force=True)
                 if working:
                     models = self._ollama_models_cache or [working]
                     return True, (f"OK \u2014 {len(models)} modelos, "
@@ -1250,7 +1251,7 @@ def run():
                 req = urllib.request.Request(url, headers=hdr, method="GET")
                 with urllib.request.urlopen(req, timeout=10) as r:
                     pass
-                working = self._auto_select_model(self.api_provider, key)
+                working = self._auto_select_model(self.api_provider, key, force=True)
                 if working:
                     cfg["model"] = working
                     return True, f"OK \u2014 modelo: {working}"
