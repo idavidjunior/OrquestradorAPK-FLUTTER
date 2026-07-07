@@ -8,7 +8,7 @@ Features:
   - Build com FlutterBuildOrchestrator (log redirecionado via log_callback)
   - Detec\u00e7\u00e3o autom\u00e1tica de dispositivo Android via ADB + instala\u00e7\u00e3o autom\u00e1tica
   - Abertura r\u00e1pida da pasta de sa\u00edda do APK compilado
-  - M\u00faltiplas fontes de API (Gemini, OpenAI, Anthropic, OpenRouter)
+  - M\u00faltiplas fontes de API (Gemini, OpenAI, Anthropic, OpenRouter, + personalizado)
 
 customtkinter \u00e9 lazy (importado apenas dentro de run()).
 """
@@ -38,7 +38,20 @@ def run():
     class BuildOrchestratorGUI(ctk.CTk):
         """Janela principal do Flutter Build Orchestrator."""
 
-        API_PROVIDERS = ["Gemini", "OpenAI", "Anthropic", "OpenRouter", "Ollama (local)"]
+        API_PROVIDERS = [
+            "Gemini", "OpenAI", "Anthropic", "OpenRouter",
+            "Ollama (local)", "Personalizado..."
+        ]
+
+        COMMON_ADB_PATHS = [
+            Path(os.environ.get("LOCALAPPDATA", "C:\\")) / "Android" / "Sdk" / "platform-tools" / "adb.exe",
+            Path(os.environ.get("ANDROID_HOME", "")) / "platform-tools" / "adb.exe",
+            Path(os.environ.get("ANDROID_SDK_ROOT", "")) / "platform-tools" / "adb.exe",
+            Path("C:\\Program Files\\Android\\android-sdk\\platform-tools\\adb.exe"),
+            Path("C:\\Android\\Sdk\\platform-tools\\adb.exe"),
+            Path("C:\\Program Files (x86)\\Android\\android-sdk\\platform-tools\\adb.exe"),
+            Path.home() / "AppData" / "Local" / "Android" / "Sdk" / "platform-tools" / "adb.exe",
+        ]
 
         def __init__(self):
             super().__init__()
@@ -53,16 +66,47 @@ def run():
             # ADB state
             self.adb_available = False
             self.adb_device = ""
-            self._adb_prev_state = None  # None / True / False
+            self._adb_prev_state = None
             self._adb_poll_active = True
+            self._adb_path = self._find_adb_path()
 
             # API state
             self.api_provider = "Gemini"
             self.api_key = ""
+            self._custom_providers = {}
 
             self._build_ui()
             self._start_adb_poll()
             self.log.ok("GUI pronta \u2014 selecione/cole um projeto para come\u00e7ar")
+
+        # ==================================================================
+        #  ADB — localiza\u00e7\u00e3o autom\u00e1tica
+        # ==================================================================
+
+        @staticmethod
+        def _find_adb_path():
+            """Procura adb.exe em locais comuns do Android SDK."""
+            for p in BuildOrchestratorGUI.COMMON_ADB_PATHS:
+                if p.exists():
+                    return str(p)
+            # Tenta no PATH
+            try:
+                r = subprocess.run(["adb", "--version"], capture_output=True, text=True, timeout=5)
+                if r.returncode == 0:
+                    return "adb"
+            except Exception:
+                pass
+            return None
+
+        def _select_adb_path(self):
+            caminho = filedialog.askopenfilename(
+                title="Selecione o execut\u00e1vel ADB",
+                filetypes=[("adb.exe", "adb.exe"), ("Todos os arquivos", "*.*")],
+            )
+            if caminho:
+                self._adb_path = caminho
+                self.log.ok(f"ADB manual: {caminho}")
+                self.lbl_adb.configure(text=f"ADB: {Path(caminho).name}", text_color="#888")
 
         # ==================================================================
         #  UI
@@ -232,6 +276,12 @@ def run():
             )
             self.lbl_adb.pack(fill="x", pady=1)
 
+            self.btn_select_adb = ctk.CTkButton(
+                util_frame, text="Selecionar ADB manualmente",
+                command=self._select_adb_path,
+            )
+            self.btn_select_adb.pack(fill="x", pady=2)
+
             self.check_install_adb = ctk.CTkCheckBox(
                 util_frame, text="Instalar APK no dispositivo via ADB",
             )
@@ -319,7 +369,6 @@ def run():
             ).start()
 
         def _detect_project_type(self, raw: str) -> str:
-            """Tenta identificar o tipo de projeto colado."""
             if re.search(r"^name:\s*\S", raw, re.M) and re.search(
                 r"^dependencies:", raw, re.M
             ):
@@ -398,7 +447,6 @@ def run():
                 self._set_build_state(False)
 
         def _write_minimal_project(self, project_dir: Path):
-            """Escreve estrutura m\u00ednima para um projeto Flutter."""
             (project_dir / "lib").mkdir(exist_ok=True)
             (project_dir / "android" / "app" / "src" / "main").mkdir(
                 parents=True, exist_ok=True
@@ -466,12 +514,70 @@ def run():
             )
 
         # ==================================================================
-        #  Handlers — API Key (m\u00faltiplas fontes)
+        #  Handlers — API Key (m\u00faltiplas fontes + personalizado)
         # ==================================================================
 
         def _on_api_provider_change(self, choice: str):
+            if choice == "Personalizado...":
+                self._add_custom_provider()
+                return
             self.api_provider = choice
             self.log.info(f"Provedor de API selecionado: {choice}")
+
+        def _add_custom_provider(self):
+            dialogo = ctk.CTkToplevel(self)
+            dialogo.title("Adicionar Provedor Personalizado")
+            dialogo.geometry("480x320")
+            dialogo.transient(self)
+            dialogo.grab_set()
+
+            campos = {}
+            r = 0
+            for label, key, placeholder in [
+                ("Nome do provedor", "name", "ex: MeuProvedor"),
+                ("URL Base", "url", "https://api.exemplo.com/v1"),
+                ("Modelo (opcional)", "model", "ex: meu-modelo-v1"),
+                ("Header de autentica\u00e7\u00e3o", "auth_header", "Authorization"),
+                ("Prefixo do valor", "auth_prefix", "Bearer "),
+            ]:
+                ctk.CTkLabel(dialogo, text=label).grid(
+                    row=r, column=0, padx=10, pady=4, sticky="w"
+                )
+                entry = ctk.CTkEntry(dialogo, width=300, placeholder_text=placeholder)
+                entry.grid(row=r, column=1, padx=10, pady=4, sticky="ew")
+                if key in ("auth_header", "auth_prefix"):
+                    entry.insert(0, placeholder)
+                campos[key] = entry
+                r += 1
+
+            def salvar():
+                name = campos["name"].get().strip()
+                url = campos["url"].get().strip()
+                if not name or not url:
+                    messagebox.showwarning("Aviso", "Nome e URL s\u00e3o obrigat\u00f3rios")
+                    return
+                cfg = {
+                    "url": url,
+                    "model": campos["model"].get().strip() or None,
+                    "auth_header": campos["auth_header"].get().strip() or "Authorization",
+                    "auth_prefix": campos["auth_prefix"].get().strip() or "Bearer ",
+                }
+                self._custom_providers[name] = cfg
+                # Atualiza dropdown
+                vals = [p for p in self.API_PROVIDERS if p != "Personalizado..."]
+                vals.append(name)
+                vals.append("Personalizado...")
+                self.api_provider_menu.configure(values=vals)
+                self.api_provider_menu.set(name)
+                self.api_provider = name
+                self.log.ok(f"Provedor personalizado adicionado: {name}")
+                dialogo.destroy()
+
+            ctk.CTkButton(
+                dialogo, text="Salvar Provedor", command=salvar,
+                fg_color="#2E7D32",
+            ).grid(row=r, column=0, columnspan=2, pady=12)
+            dialogo.grid_columnconfigure(1, weight=1)
 
         def _save_api_key(self):
             key = self.api_key_entry.get().strip()
@@ -505,6 +611,8 @@ def run():
                 ok, msg = self._validate_openrouter_key(key)
             elif provider == "Ollama (local)":
                 ok, msg = self._validate_ollama()
+            elif provider in self._custom_providers:
+                ok, msg = self._validate_custom_provider(key)
             else:
                 ok, msg = False, "Provedor desconhecido"
 
@@ -523,8 +631,7 @@ def run():
                 )
                 with __import__("urllib.request").urlopen(req, timeout=10) as r:
                     data = __import__("json").loads(r.read())
-                models = data.get("data", [])
-                return True, f"OK \u2014 {len(models)} modelos dispon\u00edveis"
+                return True, f"OK \u2014 {len(data.get('data', []))} modelos dispon\u00edveis"
             except Exception as e:
                 err = str(e)
                 if "401" in err:
@@ -584,6 +691,24 @@ def run():
                 return True, "Ollama rodando (sem modelos)"
             except Exception:
                 return False, "Ollama n\u00e3o encontrado em localhost:11434"
+
+        def _validate_custom_provider(self, key: str):
+            cfg = self._custom_providers.get(self.api_provider)
+            if not cfg:
+                return False, "Configura\u00e7\u00e3o do provedor n\u00e3o encontrada"
+            url = cfg["url"]
+            try:
+                hdr = {cfg["auth_header"]: f"{cfg['auth_prefix']}{key}"}
+                req = __import__("urllib.request", fromlist=["Request"]).Request(
+                    url, headers=hdr, method="GET"
+                )
+                with __import__("urllib.request").urlopen(req, timeout=15) as r:
+                    return True, f"Conectado (HTTP {r.status})"
+            except Exception as e:
+                err = str(e)
+                if "401" in err:
+                    return False, "Chave inv\u00e1lida para este provedor"
+                return False, f"Erro: {err[:100]}"
 
         # ==================================================================
         #  Handlers — Build
@@ -654,10 +779,11 @@ def run():
             self.btn_open_output.configure(state=est)
             self.btn_validate_api.configure(state=est)
             self.btn_save_api.configure(state=est)
+            self.btn_select_adb.configure(state=est)
             self.btn_stop.configure(state="normal" if running else "disabled")
 
         # ==================================================================
-        #  ADB — detec\u00e7\u00e3o autom\u00e1tica (polling a cada 3s)
+        #  ADB — detec\u00e7\u00e3o autom\u00e1tica com fallback de path
         # ==================================================================
 
         def _start_adb_poll(self):
@@ -672,13 +798,18 @@ def run():
                 return
             threading.Thread(target=self._run_adb_check, daemon=True).start()
 
+        def _adb_cmd(self, *args):
+            """Executa comando ADB usando o path resolvido."""
+            if self._adb_path and self._adb_path != "adb":
+                cmd = [self._adb_path] + list(args)
+            else:
+                cmd = ["adb"] + list(args)
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
         def _run_adb_check(self):
             result = {"available": False, "device": "", "error": None}
             try:
-                r = subprocess.run(
-                    ["adb", "devices"],
-                    capture_output=True, text=True, timeout=10,
-                )
+                r = self._adb_cmd("devices")
                 lines = r.stdout.strip().split("\n")
                 devices = [
                     l.split("\t")[0]
@@ -688,15 +819,30 @@ def run():
                 result["available"] = len(devices) > 0
                 result["device"] = devices[0] if devices else ""
             except FileNotFoundError:
-                result["error"] = "ADB n\u00e3o encontrado no PATH"
+                # Tenta localizar ADB automaticamente
+                found = self._find_adb_path()
+                if found and found != self._adb_path:
+                    self._adb_path = found
+                    self.log.ok(f"ADB localizado automaticamente: {Path(found).name}")
+                    # Reexecuta no pr\u00f3ximo ciclo
+                else:
+                    result["error"] = "ADB n\u00e3o encontrado — use 'Selecionar ADB manualmente'"
             except Exception as e:
                 result["error"] = str(e)[:60]
-            # Volta para a thread principal para atualizar UI
+
             self.after(0, self._update_adb_ui, result)
 
         def _update_adb_ui(self, result):
             state = result["available"] if not result["error"] else "error"
-            if result["error"]:
+            if not self._adb_path:
+                self.lbl_adb.configure(
+                    text="ADB: clique em 'Selecionar ADB manualmente'",
+                    text_color="#FF5722",
+                )
+                if self._adb_prev_state != "nopath":
+                    self.log.err("ADB n\u00e3o encontrado — selecione manualmente")
+                    self._adb_prev_state = "nopath"
+            elif result["error"]:
                 self.adb_available = False
                 self.adb_device = ""
                 self.lbl_adb.configure(
@@ -725,7 +871,6 @@ def run():
                     self.log.info("ADB: nenhum dispositivo conectado")
                     self._adb_prev_state = False
 
-            # Reagenda
             self.after(3000, self._do_adb_poll)
 
         def _install_via_adb(self):
@@ -735,10 +880,7 @@ def run():
                 return
             self.log.info(f"Instalando {Path(apk).name} no dispositivo...")
             try:
-                r = subprocess.run(
-                    ["adb", "-s", self.adb_device, "install", "-r", str(apk)],
-                    capture_output=True, text=True, timeout=120,
-                )
+                r = self._adb_cmd("-s", self.adb_device, "install", "-r", str(apk))
                 if r.returncode == 0:
                     self.log.ok("APK instalado com sucesso no dispositivo!")
                 else:
