@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 from urllib.request import urlopen, Request
-from urllib.error import URLError
+from urllib.error import URLError, HTTPError
 
 
 try:
@@ -157,9 +157,11 @@ class FlutterBuildOrchestrator:
                  output_dir: str = "build_output",
                  auto_install: bool = False,
                  log_callback=None,
+                 progress_callback=None,
                  api_provider: str = None,
                  api_key: str = None,
                  api_model: str = None,
+                 model_fallback_list: list = None,
                  kb_path: str = None):
         self.project_path = Path(project_path).resolve()
         if Path(output_dir).is_absolute():
@@ -168,6 +170,7 @@ class FlutterBuildOrchestrator:
             self.output_dir = (self.project_path / output_dir).resolve()
         self.auto_install = auto_install
         self._log_callback = log_callback
+        self._progress_callback = progress_callback
         self.build_log: List[Dict] = []
         self.start_time = datetime.now()
         self.flutter_cmd = "flutter"
@@ -181,6 +184,14 @@ class FlutterBuildOrchestrator:
         self._last_errors = []
         self._last_fix_applied = None
         self._fix_cache = {}
+        self._model_fallback_list = model_fallback_list or []
+
+    def _progress(self, percent: int, status: str):
+        if self._progress_callback:
+            try:
+                self._progress_callback(percent, status)
+            except Exception:
+                pass
 
     def cancel(self):
         self._cancelled = True
@@ -821,6 +832,21 @@ class FlutterBuildOrchestrator:
             self.log("IA retornou conte\u00fado muito curto", "WARNING")
             return None
 
+        except HTTPError as e:
+            code = e.code
+            reason = str(e.reason)[:100] if e.reason else ""
+            self.log(f"IA: HTTP {code} com modelo {model}", "ERROR")
+            # Tenta fallback para outro modelo se 401/402/403
+            if code in (401, 402, 403) and self._model_fallback_list:
+                remaining = [m for m in self._model_fallback_list
+                             if m != model]
+                if remaining:
+                    next_m = remaining[0]
+                    self._model_fallback_list = remaining
+                    self.api_model = next_m
+                    self.log(f"Tentando fallback para modelo: {next_m}...", "INFO")
+                    return self._ai_fix_code(errors, code, extra_files)
+            return None
         except URLError as e:
             self.log(f"Erro de conex\u00e3o com IA: {e.reason[:100]}", "ERROR")
         except Exception as e:
@@ -1018,11 +1044,14 @@ class FlutterBuildOrchestrator:
         ]
 
         apk_path = None
-        for name, fn in steps:
+        total = len(steps)
+        for idx, (name, fn) in enumerate(steps):
             if self._cancelled:
                 self.log("Build cancelado pelo usu\u00e1rio", "WARNING")
                 self.generate_build_report(apk_path, False)
                 return False
+            pct = int((idx / total) * 100)
+            self._progress(pct, name)
             self.log(f"\n>>> {name}", "STEP")
             try:
                 result = fn()
@@ -1032,6 +1061,8 @@ class FlutterBuildOrchestrator:
                     return False
                 if name == "Artifacts" and result:
                     apk_path = result
+                self._progress(int(((idx + 1) / total) * 100),
+                               f"{name} — conclu\u00eddo")
             except Exception as e:
                 self.log(f"Erro em '{name}': {e}", "ERROR")
                 self.generate_build_report(apk_path, False)

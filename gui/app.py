@@ -111,6 +111,7 @@ def run():
             self._ollama_models_cache = []
 
             self._build_ui()
+            self._load_state()
             self._start_adb_poll()
             self.log.ok("GUI pronta \u2014 selecione/cole um projeto para come\u00e7ar")
 
@@ -344,6 +345,23 @@ def run():
             )
             self.btn_open_output.pack(fill="x", pady=2)
 
+            # -- Progresso --
+            ctk.CTkLabel(
+                left, text="Progresso",
+                font=ctk.CTkFont(size=14, weight="bold"),
+            ).grid(row=r, column=0, pady=(8, 2), sticky="w"); r += 1
+
+            self.progress_bar = ctk.CTkProgressBar(left, height=16)
+            self.progress_bar.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
+            self.progress_bar.set(0)
+
+            self.lbl_progress_status = ctk.CTkLabel(
+                left, text="", font=ctk.CTkFont(size=11),
+            )
+            self.lbl_progress_status.grid(
+                row=r, column=0, padx=10, pady=(0, 2), sticky="w"
+            ); r += 1
+
             # ── Right panel (log) ──────────────────────────────────────
             right = ctk.CTkFrame(self)
             right.grid(row=1, column=1, sticky="nsew", padx=(2, 5), pady=5)
@@ -365,6 +383,52 @@ def run():
         #  Handlers — fonte do projeto
         # ==================================================================
 
+        @property
+        def _state_file(self) -> Path:
+            p = Path.home() / ".flutter_orchestrator"
+            p.mkdir(parents=True, exist_ok=True)
+            return p / "state.json"
+
+        def _load_state(self):
+            try:
+                if not self._state_file.exists():
+                    return
+                data = json.loads(self._state_file.read_text(encoding="utf-8"))
+                prov = data.get("api_provider", "Gemini")
+                if prov in self.API_PROVIDERS or prov in self._custom_providers:
+                    self.api_provider = prov
+                    self.api_provider_menu.set(prov)
+                key = data.get("api_key", "")
+                if key:
+                    self.api_key = key
+                    self.api_key_entry.insert(0, key)
+                self._auto_selected_models.update(
+                    data.get("auto_selected_models", {})
+                )
+                proj = data.get("last_project_dir", "")
+                if proj and Path(proj).exists():
+                    self.project_dir = Path(proj)
+                    self.log.ok(f"\u00daltimo projeto restaurado: {proj}")
+                self.log.info("Estado restaurado da sess\u00e3o anterior")
+            except Exception as e:
+                self.log.warn(f"N\u00e3o foi poss\u00edvel restaurar estado: {e}")
+
+        def _save_state(self):
+            try:
+                data = {
+                    "api_provider": self.api_provider,
+                    "api_key": self.api_key,
+                    "auto_selected_models": dict(self._auto_selected_models),
+                    "last_project_dir": str(self.project_dir)
+                    if self.project_dir else "",
+                }
+                self._state_file.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception as e:
+                self.log.warn(f"Erro ao salvar estado: {e}")
+
         def _toggle_theme(self):
             atual = ctk.get_appearance_mode()
             ctk.set_appearance_mode("Light" if atual == "Dark" else "Dark")
@@ -375,6 +439,7 @@ def run():
             )
             if pasta:
                 self.project_dir = Path(pasta).resolve()
+                self._save_state()
                 self.log.ok(f"Projeto selecionado: {self.project_dir}")
 
         def _clone_github(self):
@@ -488,6 +553,7 @@ def run():
                 )
 
                 self.project_dir = project_dir
+                self._save_state()
                 self.log.ok(f"Projeto preparado em: {project_dir}")
                 self.log.info("Voc\u00ea j\u00e1 pode iniciar o build!")
 
@@ -685,15 +751,15 @@ def run():
                 encoding="utf-8",
             )
 
-            # ── gradle-wrapper.properties ────────────────────────────
+            # ── gradle-wrapper.properties (escape simples \\: ) ──────
             (project_dir / "android" / "gradle" / "wrapper"
              / "gradle-wrapper.properties").write_text(
                 "distributionBase=GRADLE_USER_HOME\n"
                 "distributionPath=wrapper/dists\n"
                 "zipStoreBase=GRADLE_USER_HOME\n"
                 "zipStorePath=wrapper/dists\n"
-                "distributionUrl=https\\\\://services.gradle.org/"
-                "distributions/gradle-8.3-all.zip\n",
+                "distributionUrl=https\\://services.gradle.org/"
+                "distributions/gradle-8.10.2-all.zip\n",
                 encoding="utf-8",
             )
 
@@ -843,6 +909,7 @@ def run():
                 messagebox.showwarning("Aviso", "Digite uma chave primeiro")
                 return
             self.api_key = key
+            self._save_state()
             self.log.ok(
                 f"Chave salva para {self.api_provider} "
                 f"(termina em ...{key[-4:]})"
@@ -1205,8 +1272,17 @@ def run():
                 return
             threading.Thread(target=self._run_build, daemon=True).start()
 
+        def _on_progress(self, percent: int, status: str):
+            self.progress_bar.set(percent / 100.0)
+            self.lbl_progress_status.configure(
+                text=f"{percent}% — {status}"
+            )
+            self.update_idletasks()
+
         def _run_build(self):
             self._set_build_state(True)
+            self._on_progress(0, "Iniciando...")
+            self._save_state()
             try:
                 release = self._release_var.get()
                 skip = self.check_skip_tests.get()
@@ -1221,13 +1297,29 @@ def run():
                 selected_model = self._auto_selected_models.get(
                     self.api_provider
                 )
+
+                # Lista de fallback de modelos (todos exceto o atual)
+                all_models = []
+                if self.api_provider in self.OPENAI_COMPATIBLE:
+                    all_models = self._list_models_for_provider(
+                        self.api_provider, self.api_key
+                    )
+                elif self.api_provider in self._custom_providers:
+                    all_models = self._list_models_for_provider(
+                        self.api_provider, self.api_key
+                    )
+                elif self.api_provider == "Ollama (local)":
+                    all_models = self._ollama_models_cache[:]
+
                 self.orch = FlutterBuildOrchestrator(
                     project_path=str(self.project_dir),
                     auto_install=auto_install,
                     log_callback=self._on_log,
+                    progress_callback=self._on_progress,
                     api_provider=self.api_provider if self.api_key else None,
                     api_key=self.api_key or None,
                     api_model=selected_model,
+                    model_fallback_list=all_models,
                     kb_path=kb_path,
                 )
                 success = self.orch.orchestrate(
@@ -1238,6 +1330,7 @@ def run():
                 if success and self.check_install_adb.get() and self.adb_available:
                     self._install_via_adb()
 
+                self._on_progress(100, "Conclu\u00eddo" if success else "Falhou")
             except Exception as e:
                 self.log.err(f"Erro inesperado: {e}")
             finally:
