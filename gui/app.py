@@ -804,6 +804,10 @@ def run():
             if provider == "Gemini":
                 from gui.gemini_fixer import GeminiCodeFixer
                 ok, msg = GeminiCodeFixer.validate_key(self.api_key)
+                if ok:
+                    working = self._auto_select_model("Gemini", self.api_key)
+                    if working:
+                        msg = f"OK \u2014 modelo: {working}"
             elif provider == "OpenAI":
                 ok, msg = self._validate_openai_key(self.api_key)
             elif provider == "Anthropic":
@@ -856,6 +860,10 @@ def run():
             if provider == "Gemini":
                 from gui.gemini_fixer import GeminiCodeFixer
                 ok, msg = GeminiCodeFixer.validate_key(key)
+                if ok:
+                    working = self._auto_select_model("Gemini", key)
+                    if working:
+                        msg = f"OK \u2014 modelo: {working}"
             elif provider == "OpenAI":
                 ok, msg = self._validate_openai_key(key)
             elif provider == "Anthropic":
@@ -889,67 +897,192 @@ def run():
             return self._validate_openai_compatible(key, "OpenAI",
                 "https://api.openai.com/v1/models")
 
-        def _find_working_model(self, provider: str, key: str,
-                                 models: list) -> Optional[str]:
-            """Testa cada modelo via chat completions at\u00e9 achar um que funcione."""
-            base_url = self.OPENAI_COMPATIBLE.get(provider, [None])[0]
-            if not base_url:
-                base_url = self._custom_providers.get(provider, {}).get("url", "")
-            base_url = base_url.rstrip("/")
-
-            # Filtra modelos que parecem ser de chat (n\u00e3o embedding/tts/whisper)
-            chat_keywords = ["gpt", "claude", "gemini", "llama", "mistral", "mixtral",
-                             "command", "jamba", "grok", "sonar", "deepseek",
-                             "qwen", "phi", "nemotron", "dbrx", "yi", "chat"]
-            skip_keywords = ["embedding", "tts", "whisper", "davinci", "babbage",
-                             "curie", "ada", "moderation", "similarity"]
-
-            candidates = []
-            for m in models:
-                mid = m.get("id", "") if isinstance(m, dict) else str(m)
-                mid_lower = mid.lower()
-                # Pula modelos que s\u00e3o claramente n\u00e3o-chat
-                if any(s in mid_lower for s in skip_keywords):
-                    continue
-                # D\u00e1 prefer\u00eancia a modelos com palavras-chave de chat
-                if any(k in mid_lower for k in chat_keywords):
-                    candidates.append(mid)
-            # Se nenhum candidato por keyword, usa todos exceto os pulados
-            if not candidates:
-                for m in models:
-                    mid = m.get("id", "") if isinstance(m, dict) else str(m)
-                    if not any(s in mid.lower() for s in skip_keywords):
-                        candidates.append(mid)
-
-            # Tenta cada modelo com uma requisi\u00e7\u00e3o m\u00ednima de chat
-            for mid in candidates:
-                chat_url = f"{base_url}/chat/completions"
-                payload = json.dumps({
-                    "model": mid,
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 5,
-                }).encode()
-                try:
+        def _list_models_for_provider(self, provider: str,
+                                        key: str) -> list:
+            """Retorna lista de IDs de modelo dispon\u00edveis para qualquer provedor."""
+            try:
+                if provider == "Gemini":
+                    url = ("https://generativelanguage.googleapis.com/v1beta/"
+                           f"models?key={key}")
+                    with urllib.request.urlopen(url, timeout=10) as r:
+                        data = json.loads(r.read())
+                    return [m["name"].replace("models/", "")
+                            for m in data.get("models", [])
+                            if "generateContent" in m.get("supportedGenerationMethods", [])]
+                elif provider == "Anthropic":
                     req = urllib.request.Request(
-                        chat_url, data=payload,
+                        "https://api.anthropic.com/v1/models",
+                        headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        data = json.loads(r.read())
+                    return [m["id"] for m in data.get("data", []) if m.get("id")]
+                elif provider == "OpenRouter":
+                    req = urllib.request.Request(
+                        "https://openrouter.ai/api/v1/models",
+                        headers={"Authorization": f"Bearer {key}"},
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        data = json.loads(r.read())
+                    raw = data.get("data", [])
+                    return [m["id"] for m in raw if m.get("id")]
+                elif provider in self.OPENAI_COMPATIBLE:
+                    base_url = self.OPENAI_COMPATIBLE[provider][0].rstrip("/")
+                    req = urllib.request.Request(
+                        f"{base_url}/models",
+                        headers={"Authorization": f"Bearer {key}"},
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        data = json.loads(r.read())
+                    return [m["id"] for m in data.get("data", []) if m.get("id")]
+                elif provider in self._custom_providers:
+                    cfg = self._custom_providers[provider]
+                    url = cfg["url"].rstrip("/")
+                    if not url.endswith("/models"):
+                        url += "/models"
+                    hdr = {cfg.get("auth_header", "Authorization"):
+                           f"{cfg.get('auth_prefix', 'Bearer ')}{key}"}
+                    req = urllib.request.Request(url, headers=hdr)
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        data = json.loads(r.read())
+                    return [m["id"] for m in data.get("data", data.get("models", []))
+                            if isinstance(m, dict) and m.get("id")]
+                elif provider == "Ollama (local)":
+                    req = urllib.request.Request("http://localhost:11434/api/tags")
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        data = json.loads(r.read())
+                    names = [m.get("name", "") for m in data.get("models", [])
+                             if m.get("name")]
+                    self._ollama_models_cache = names
+                    return names
+                return []
+            except Exception:
+                return []
+
+        def _test_chat_model(self, provider: str, key: str,
+                              model_id: str) -> bool:
+            """Testa se um modelo responde a chat completions."""
+            try:
+                if provider == "Gemini":
+                    url = ("https://generativelanguage.googleapis.com/v1beta/"
+                           f"models/{model_id}:generateContent?key={key}")
+                    payload = json.dumps({
+                        "contents": [{"parts": [{"text": "hi"}]}],
+                        "generationConfig": {"maxOutputTokens": 5},
+                    })
+                    req = urllib.request.Request(
+                        url, data=payload.encode(),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        resp = json.loads(r.read())
+                    return bool(resp.get("candidates"))
+                elif provider == "Anthropic":
+                    payload = json.dumps({
+                        "model": model_id, "max_tokens": 5,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    })
+                    req = urllib.request.Request(
+                        "https://api.anthropic.com/v1/messages",
+                        data=payload.encode(),
                         headers={
                             "Content-Type": "application/json",
-                            "Authorization": f"Bearer {key}",
+                            "x-api-key": key,
+                            "anthropic-version": "2023-06-01",
                         },
                         method="POST",
                     )
                     with urllib.request.urlopen(req, timeout=15) as r:
                         resp = json.loads(r.read())
-                        if resp.get("choices") or resp.get("candidates"):
-                            self._auto_selected_models[provider] = mid
-                            return mid
-                except Exception:
-                    continue
+                    return bool(resp.get("content"))
+                else:
+                    # OpenAI-compatible (OpenAI, DeepSeek, Groq, ...)
+                    if provider in self.OPENAI_COMPATIBLE:
+                        base_url = self.OPENAI_COMPATIBLE[provider][0].rstrip("/")
+                        auth = f"Bearer {key}"
+                    elif provider == "OpenRouter":
+                        base_url = "https://openrouter.ai/api/v1"
+                        auth = f"Bearer {key}"
+                    elif provider in self._custom_providers:
+                        cfg = self._custom_providers[provider]
+                        base_url = cfg["url"].rstrip("/")
+                        auth = f"{cfg.get('auth_prefix', 'Bearer ')}{key}"
+                    else:
+                        return False
+                    payload = json.dumps({
+                        "model": model_id,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 5,
+                    })
+                    req = urllib.request.Request(
+                        f"{base_url}/chat/completions",
+                        data=payload.encode(),
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": auth,
+                        },
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        resp = json.loads(r.read())
+                    return bool(resp.get("choices"))
+            except Exception:
+                return False
+
+        def _auto_select_model(self, provider: str, key: str) -> Optional[str]:
+            """Auto-seleciona modelo funcional para QUALQUER provedor."""
+            if not key:
+                return None
+
+            # Se j\u00e1 foi selecionado antes, mant\u00e9m
+            cached = self._auto_selected_models.get(provider)
+            if cached:
+                return cached
+
+            models = self._list_models_for_provider(provider, key)
+            if not models:
+                return None
+
+            # Filtra modelos n\u00e3o-chat
+            skip_keywords = ["embedding", "tts", "whisper", "davinci",
+                             "babbage", "curie", "ada", "moderation",
+                             "similarity", "edit"]
+            chat_keywords = ["gpt", "claude", "gemini", "llama", "mistral",
+                             "mixtral", "command", "jamba", "grok", "sonar",
+                             "deepseek", "qwen", "phi", "nemotron", "dbrx",
+                             "yi", "chat", "flash", "pro", "haiku",
+                             "sonnet", "opus"]
+
+            candidates = [m for m in models
+                          if not any(s in m.lower() for s in skip_keywords)]
+            # Ordena: prefer\u00eancia para candidatos com keywords de chat
+            chat_first = [m for m in candidates
+                          if any(k in m.lower() for k in chat_keywords)]
+            other = [m for m in candidates if m not in chat_first]
+            ordered = chat_first + other
+
+            for mid in ordered[:20]:  # testa no m\u00e1ximo 20 modelos
+                if self._test_chat_model(provider, key, mid):
+                    self._auto_selected_models[provider] = mid
+                    # Atualiza config se for OpenAI-compatible
+                    if provider in self.OPENAI_COMPATIBLE:
+                        self.OPENAI_COMPATIBLE[provider] = (
+                            self.OPENAI_COMPATIBLE[provider][0], mid
+                        )
+                    elif provider in self._custom_providers:
+                        self._custom_providers[provider]["model"] = mid
+                    return mid
+
+            # Fallback: primeiro modelo da lista
+            if ordered:
+                fallback = ordered[0]
+                self._auto_selected_models[provider] = fallback
+                return fallback
             return None
 
         def _validate_openai_compatible(self, key: str, provider: str,
                                          base_url: str = None):
-            """Valida chave, lista modelos e auto-seleciona um funcional."""
+            """Valida chave contra API compat\u00edvel com OpenAI + auto-select model."""
             url = base_url or self.OPENAI_COMPATIBLE.get(provider, [None])[0]
             if not url:
                 cfg = self.OPENAI_COMPATIBLE.get(provider)
@@ -959,35 +1092,15 @@ def run():
                 return False, "URL n\u00e3o configurada"
             try:
                 req = urllib.request.Request(
-                    url,
-                    headers={"Authorization": f"Bearer {key}"},
+                    url, headers={"Authorization": f"Bearer {key}"},
                 )
+                resp_status = 0
                 with urllib.request.urlopen(req, timeout=10) as r:
-                    data = json.loads(r.read())
-                raw_models = data.get("data", [])
-
-                if not raw_models:
-                    return True, f"Conectado (HTTP {r.status})"
-
-                total = len(raw_models)
-
-                # Auto-seleciona modelo funcional
-                working = self._find_working_model(provider, key, raw_models)
+                    resp_status = r.status
+                working = self._auto_select_model(provider, key)
                 if working:
-                    # Atualiza configura\u00e7\u00e3o nos dois lugares
-                    self.OPENAI_COMPATIBLE[provider] = (
-                        self.OPENAI_COMPATIBLE[provider][0], working
-                    )
-                    return True, (f"OK \u2014 {total} modelos, "
-                                   f"auto-selecionado: {working}")
-                # Atualiza config com o primeiro modelo como fallback
-                first = (raw_models[0].get("id", "")
-                         if isinstance(raw_models[0], dict) else str(raw_models[0]))
-                self.OPENAI_COMPATIBLE[provider] = (
-                    self.OPENAI_COMPATIBLE[provider][0], first
-                )
-                return True, (f"OK \u2014 {total} modelos "
-                               f"(sem chat confirmado, usando: {first})")
+                    return True, (f"OK \u2014 modelo: {working}")
+                return True, f"Conectado (HTTP {resp_status})"
             except Exception as e:
                 err = str(e)
                 if "401" in err:
@@ -1011,6 +1124,9 @@ def run():
                     method="POST",
                 )
                 with urllib.request.urlopen(req, timeout=15) as r:
+                    working = self._auto_select_model("Anthropic", key)
+                    if working:
+                        return True, f"Chave v\u00e1lida, modelo: {working}"
                     return True, "Chave v\u00e1lida"
             except urllib.error.HTTPError as e:
                 if e.code == 401:
@@ -1028,6 +1144,9 @@ def run():
                     headers={"Authorization": f"Bearer {key}"},
                 )
                 with urllib.request.urlopen(req, timeout=10) as r:
+                    working = self._auto_select_model("OpenRouter", key)
+                    if working:
+                        return True, f"Chave v\u00e1lida, modelo: {working}"
                     return True, "Chave v\u00e1lida"
             except urllib.error.HTTPError as e:
                 if e.code == 401:
@@ -1038,19 +1157,11 @@ def run():
 
         def _validate_ollama(self):
             try:
-                req = urllib.request.Request("http://localhost:11434/api/tags")
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    data = json.loads(r.read())
-                models = data.get("models", [])
-                if models:
-                    names = [m.get("name", "") for m in models if m.get("name")]
-                    # Auto-seleciona primeiro modelo Ollama dispon\u00edvel
-                    if names:
-                        self._auto_selected_models["Ollama (local)"] = names[0]
-                        self._ollama_models_cache = names
-                        return True, (f"OK \u2014 {len(names)} modelos, "
-                                       f"auto: {names[0]}")
-                    return True, f"OK \u2014 {len(models)} modelos"
+                working = self._auto_select_model("Ollama (local)", "")
+                if working:
+                    models = self._ollama_models_cache or [working]
+                    return True, (f"OK \u2014 {len(models)} modelos, "
+                                   f"auto: {working}")
                 return True, "Ollama rodando (sem modelos)"
             except Exception:
                 return False, "Ollama n\u00e3o encontrado em localhost:11434"
@@ -1063,42 +1174,21 @@ def run():
             auth_header = cfg.get("auth_header", "Authorization")
             auth_prefix = cfg.get("auth_prefix", "Bearer ")
             try:
-                # Tenta primeiro /models se a URL base parece ser API
-                models_url = url.rstrip("/")
-                if not models_url.endswith("/models"):
-                    models_url += "/models"
+                # Testa conectividade com GET na URL base
                 hdr = {auth_header: f"{auth_prefix}{key}"}
-                req = urllib.request.Request(models_url, headers=hdr, method="GET")
+                req = urllib.request.Request(url, headers=hdr, method="GET")
                 with urllib.request.urlopen(req, timeout=10) as r:
-                    data = json.loads(r.read())
-                raw_models = data.get("data", data.get("models", []))
-                if raw_models:
-                    total = len(raw_models)
-                    working = self._find_working_model(
-                        self.api_provider, key, raw_models
-                    )
-                    if working:
-                        cfg["model"] = working
-                        return True, (f"OK \u2014 {total} modelos, "
-                                       f"auto: {working}")
-                    first = (raw_models[0].get("id", "")
-                             if isinstance(raw_models[0], dict)
-                             else str(raw_models[0]))
-                    cfg["model"] = first
-                    return True, f"OK \u2014 {total} modelos (usando: {first})"
-                return True, f"Conectado (HTTP {r.status})"
-            except Exception:
-                # Fallback: tenta GET na URL base
-                try:
-                    hdr = {auth_header: f"{auth_prefix}{key}"}
-                    req = urllib.request.Request(url, headers=hdr, method="GET")
-                    with urllib.request.urlopen(req, timeout=10) as r:
-                        return True, f"Conectado (HTTP {r.status})"
-                except Exception as e:
-                    err = str(e)
-                    if "401" in err:
-                        return False, "Chave inv\u00e1lida para este provedor"
-                    return False, f"Erro: {err[:100]}"
+                    pass
+                working = self._auto_select_model(self.api_provider, key)
+                if working:
+                    cfg["model"] = working
+                    return True, f"OK \u2014 modelo: {working}"
+                return True, "Conectado"
+            except Exception as e:
+                err = str(e)
+                if "401" in err:
+                    return False, "Chave inv\u00e1lida para este provedor"
+                return False, f"Erro: {err[:100]}"
 
         # ==================================================================
         #  Handlers — Build
