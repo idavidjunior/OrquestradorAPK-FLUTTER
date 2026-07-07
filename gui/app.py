@@ -109,6 +109,7 @@ def run():
             self._auto_validate_after_id = None
             self._auto_selected_models = {}
             self._ollama_models_cache = []
+            self._bad_models = set()
 
             self._build_ui()
             self._load_state()
@@ -759,7 +760,7 @@ def run():
                 "zipStoreBase=GRADLE_USER_HOME\n"
                 "zipStorePath=wrapper/dists\n"
                 "distributionUrl=https\\://services.gradle.org/"
-                "distributions/gradle-8.10.2-all.zip\n",
+                "distributions/gradle-8.14.0-all.zip\n",
                 encoding="utf-8",
             )
 
@@ -1102,16 +1103,16 @@ def run():
             if not key:
                 return None
 
-            # Se j\u00e1 foi selecionado antes, mant\u00e9m
+            # Se j\u00e1 foi selecionado antes e n\u00e3o est\u00e1 na blacklist, mant\u00e9m
             cached = self._auto_selected_models.get(provider)
-            if cached:
+            if cached and cached not in self._bad_models:
                 return cached
 
             models = self._list_models_for_provider(provider, key)
             if not models:
                 return None
 
-            # Filtra modelos n\u00e3o-chat
+            # Filtra modelos n\u00e3o-chat e blacklist
             skip_keywords = ["embedding", "tts", "whisper", "davinci",
                              "babbage", "curie", "ada", "moderation",
                              "similarity", "edit"]
@@ -1122,7 +1123,8 @@ def run():
                              "sonnet", "opus"]
 
             candidates = [m for m in models
-                          if not any(s in m.lower() for s in skip_keywords)]
+                          if not any(s in m.lower() for s in skip_keywords)
+                          and m not in self._bad_models]
             # Ordena: prefer\u00eancia para candidatos com keywords de chat
             chat_first = [m for m in candidates
                           if any(k in m.lower() for k in chat_keywords)]
@@ -1300,16 +1302,21 @@ def run():
 
                 # Lista de fallback de modelos (todos exceto o atual)
                 all_models = []
-                if self.api_provider in self.OPENAI_COMPATIBLE:
-                    all_models = self._list_models_for_provider(
-                        self.api_provider, self.api_key
+                try:
+                    if self.api_provider in self.OPENAI_COMPATIBLE:
+                        all_models = self._list_models_for_provider(
+                            self.api_provider, self.api_key
+                        )
+                    elif self.api_provider in self._custom_providers:
+                        all_models = self._list_models_for_provider(
+                            self.api_provider, self.api_key
+                        )
+                    elif self.api_provider == "Ollama (local)":
+                        all_models = self._ollama_models_cache[:]
+                except Exception as exc:
+                    self.log.warn(
+                        f"N\u00e3o foi poss\u00edvel listar modelos: {exc}"
                     )
-                elif self.api_provider in self._custom_providers:
-                    all_models = self._list_models_for_provider(
-                        self.api_provider, self.api_key
-                    )
-                elif self.api_provider == "Ollama (local)":
-                    all_models = self._ollama_models_cache[:]
 
                 self.orch = FlutterBuildOrchestrator(
                     project_path=str(self.project_dir),
@@ -1363,6 +1370,11 @@ def run():
             self.btn_save_api.configure(state=est)
             self.btn_select_adb.configure(state=est)
             self.btn_stop.configure(state="normal" if running else "disabled")
+            # Pausa/retoma ADB poll para n\u00e3o floodar log durante build
+            if running:
+                self._stop_adb_poll()
+            else:
+                self._start_adb_poll()
 
         # ==================================================================
         #  ADB — detec\u00e7\u00e3o autom\u00e1tica com fallback de path

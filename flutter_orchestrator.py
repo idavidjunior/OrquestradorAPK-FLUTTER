@@ -719,6 +719,7 @@ class FlutterBuildOrchestrator:
         )
 
         self.log(f"Enviando erros para {self.api_provider}...", "INFO")
+        self._progress(50, f"IA ({self.api_provider}): corrigindo erros...")
 
         try:
             if cfg["type"] == "gemini":
@@ -833,11 +834,11 @@ class FlutterBuildOrchestrator:
             return None
 
         except HTTPError as e:
-            code = e.code
+            http_code = e.code
             reason = str(e.reason)[:100] if e.reason else ""
-            self.log(f"IA: HTTP {code} com modelo {model}", "ERROR")
+            self.log(f"IA: HTTP {http_code} com modelo {model}", "ERROR")
             # Tenta fallback para outro modelo se 401/402/403
-            if code in (401, 402, 403) and self._model_fallback_list:
+            if http_code in (401, 402, 403):
                 remaining = [m for m in self._model_fallback_list
                              if m != model]
                 if remaining:
@@ -845,7 +846,9 @@ class FlutterBuildOrchestrator:
                     self._model_fallback_list = remaining
                     self.api_model = next_m
                     self.log(f"Tentando fallback para modelo: {next_m}...", "INFO")
+                    self._progress(50, f"IA: fallback para {next_m}")
                     return self._ai_fix_code(errors, code, extra_files)
+                self.log("Todos os modelos de fallback esgotados", "ERROR")
             return None
         except URLError as e:
             self.log(f"Erro de conex\u00e3o com IA: {e.reason[:100]}", "ERROR")
