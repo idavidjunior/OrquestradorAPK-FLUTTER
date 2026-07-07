@@ -67,20 +67,30 @@ def log_step(msg):
 def _fetch_latest_flutter_version() -> Optional[str]:
     """
     Consulta a release API do Flutter para obter a vers\u00e3o est\u00e1vel mais recente.
+    Tenta a release JSON da plataforma atual, depois fallback para Linux.
     Retorna None se falhar (fallback para vers\u00e3o fixa conhecida).
     """
-    try:
-        url = ("https://storage.googleapis.com/"
-               "flutter_infra_release/releases/releases_linux.json")
-        req = Request(url, headers={"User-Agent": "FlutterOrchestrator/1.0"})
-        with urlopen(req, timeout=15) as r:
-            data = json.loads(r.read())
-        stable = [r for r in data.get("releases", [])
-                  if r.get("channel") == "stable"]
-        if stable:
-            return stable[0]["version"]
-    except Exception:
-        pass
+    system = platform.system()
+    releases_files = {
+        "Windows": "releases_windows.json",
+        "Darwin": "releases_macos.json",
+        "Linux": "releases_linux.json",
+    }
+    candidates = [releases_files.get(system, "releases_linux.json"),
+                  "releases_linux.json"]
+    for release_file in candidates:
+        try:
+            url = ("https://storage.googleapis.com/"
+                   f"flutter_infra_release/releases/{release_file}")
+            req = Request(url, headers={"User-Agent": "FlutterOrchestrator/1.0"})
+            with urlopen(req, timeout=15) as r:
+                data = json.loads(r.read())
+            stable = [r for r in data.get("releases", [])
+                      if r.get("channel") == "stable"]
+            if stable:
+                return stable[0]["version"]
+        except Exception:
+            continue
     return None
 
 
@@ -133,6 +143,16 @@ class FlutterBuildOrchestrator:
                       "model": "openai/gpt-4o-mini"},
     }
 
+    COMMON_FLUTTER_PATHS = [
+        "C:\\tools\\flutter",
+        "C:\\flutter",
+        "C:\\src\\flutter",
+        str(Path.home() / "flutter"),
+        str(Path.home() / "tools" / "flutter"),
+        str(Path.home() / "src" / "flutter"),
+        str(Path.home() / "sdk" / "flutter"),
+    ]
+
     def __init__(self, project_path: str,
                  output_dir: str = "build_output",
                  auto_install: bool = False,
@@ -162,6 +182,30 @@ class FlutterBuildOrchestrator:
 
     def cancel(self):
         self._cancelled = True
+
+    @staticmethod
+    def _find_flutter_path():
+        """Procura flutter em locais comuns de instala\u00e7\u00e3o."""
+        if os.name == "nt":
+            candidates = FlutterBuildOrchestrator.COMMON_FLUTTER_PATHS
+            for base in candidates:
+                candidate = Path(base) / "bin" / "flutter.bat"
+                if candidate.exists():
+                    return str(candidate)
+        else:
+            candidates = [Path(p) for p in FlutterBuildOrchestrator.COMMON_FLUTTER_PATHS]
+            for base in candidates:
+                candidate = base / "bin" / "flutter"
+                if candidate.exists():
+                    return str(candidate)
+        try:
+            r = subprocess.run(["flutter", "--version"],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                return "flutter"
+        except Exception:
+            pass
+        return None
 
     # ── Logging ────────────────────────────────────────────────────────
 
@@ -197,6 +241,17 @@ class FlutterBuildOrchestrator:
             else:
                 raise Exception("Flutter --version falhou")
         except (FileNotFoundError, Exception):
+            # Tenta localizar em locais comuns
+            found = self._find_flutter_path()
+            if found and found != self.flutter_cmd:
+                self.flutter_cmd = found
+                bin_dir = str(Path(found).parent)
+                # Gera local.properties com o SDK rec\u00e9m-descoberto
+                self.install_dir = Path(found).parent.parent
+                self._write_local_properties()
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+                self.log(f"Flutter localizado: {found}", "SUCCESS")
+                return self.check_prerequisites()
             self.log("Flutter n\u00e3o encontrado", "ERROR")
             if self.auto_install:
                 self.log("Auto-instala\u00e7\u00e3o ativada...", "INFO")
@@ -255,6 +310,9 @@ class FlutterBuildOrchestrator:
         os.environ["PATH"] = str(flutter_bin) + os.pathsep + os.environ.get("PATH", "")
         self.log(f"Flutter instalado em: {self.install_dir / 'flutter'}", "SUCCESS")
 
+        # Gera local.properties no projeto
+        self._write_local_properties()
+
         try:
             subprocess.run(
                 [self.flutter_cmd, "doctor", "--android-licenses"],
@@ -265,6 +323,32 @@ class FlutterBuildOrchestrator:
             pass
 
         return True
+
+    def _write_local_properties(self):
+        """Escreve android/local.properties com o caminho do Flutter SDK."""
+        local_props = self.project_path / "android" / "local.properties"
+        try:
+            (self.project_path / "android").mkdir(parents=True, exist_ok=True)
+            flutter_sdk = str((self.install_dir / "flutter").resolve())
+            sdk_path = os.environ.get("ANDROID_HOME", "")
+            if not sdk_path:
+                sdk_path = os.environ.get("ANDROID_SDK_ROOT", "")
+            if not sdk_path:
+                sdk_path = str(
+                    Path(os.environ.get("LOCALAPPDATA", "C:\\"))
+                    / "Android" / "Sdk"
+                ) if os.name == "nt" else "$HOME/Android/Sdk"
+            local_props.write_text(
+                f"sdk.dir={sdk_path}\n"
+                f"flutter.sdk={flutter_sdk}\n"
+                f"flutter.buildMode=release\n"
+                f"flutter.versionName=1.0.0\n"
+                f"flutter.versionCode=1\n",
+                encoding="utf-8",
+            )
+            self.log("local.properties gerado", "SUCCESS")
+        except Exception as e:
+            self.log(f"Erro ao gerar local.properties: {e}", "WARNING")
 
     def _download_file(self, url: str, dest: Path, desc: str = "Arquivo") -> bool:
         self.log(f"Baixando {desc}...", "INFO")

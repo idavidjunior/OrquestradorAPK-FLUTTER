@@ -493,12 +493,18 @@ def run():
             finally:
                 self._set_build_state(False)
 
-        def _write_minimal_project(self, project_dir: Path):
-            (project_dir / "lib").mkdir(exist_ok=True)
-            (project_dir / "android" / "app" / "src" / "main").mkdir(
-                parents=True, exist_ok=True
-            )
-            (project_dir / "test").mkdir(exist_ok=True)
+        @staticmethod
+        def _write_minimal_project(project_dir: Path):
+            """Gera estrutura Flutter completa para build Android."""
+            dirs = [
+                "lib",
+                "test",
+                "android/app/src/main/kotlin/com/temp/app",
+                "android/app/src/main/res/values",
+                "android/gradle/wrapper",
+            ]
+            for d in dirs:
+                (project_dir / d).mkdir(parents=True, exist_ok=True)
 
             (project_dir / "pubspec.yaml").write_text(
                 "name: app\n"
@@ -513,6 +519,17 @@ def run():
                 "  uses-material-design: true\n",
                 encoding="utf-8",
             )
+
+            (project_dir / "analysis_options.yaml").write_text(
+                "include: package:flutter_lints/flutter.yaml\n"
+                "linter:\n"
+                "  rules:\n"
+                "    prefer_const_constructors: false\n"
+                "    prefer_const_literals_to_create_immutables: false\n",
+                encoding="utf-8",
+            )
+
+            # ── AndroidManifest.xml ──────────────────────────────────
             manifest = (
                 project_dir / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
             )
@@ -520,6 +537,7 @@ def run():
                 '<?xml version="1.0" encoding="utf-8"?>\n'
                 '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n'
                 '    package="com.temp.app">\n'
+                '    <uses-permission android:name="android.permission.INTERNET"/>\n'
                 '    <application\n'
                 '        android:label="App"\n'
                 '        android:name="${applicationName}"\n'
@@ -536,8 +554,23 @@ def run():
                 '</manifest>\n',
                 encoding="utf-8",
             )
-            build_gradle = project_dir / "android" / "app" / "build.gradle"
-            build_gradle.write_text(
+
+            # ── MainActivity.kt ──────────────────────────────────────
+            kotlin_dir = (
+                project_dir / "android" / "app" / "src" / "main" / "kotlin"
+                / "com" / "temp" / "app"
+            )
+            kotlin_dir.mkdir(parents=True, exist_ok=True)
+            (kotlin_dir / "MainActivity.kt").write_text(
+                "package com.temp.app\n\n"
+                "import io.flutter.embedding.android.FlutterActivity\n\n"
+                "class MainActivity: FlutterActivity()\n",
+                encoding="utf-8",
+            )
+
+            # ── app/build.gradle ─────────────────────────────────────
+            app_bg = project_dir / "android" / "app" / "build.gradle"
+            app_bg.write_text(
                 "plugins {\n"
                 '    id "com.android.application"\n'
                 '    id "kotlin-android"\n'
@@ -556,7 +589,98 @@ def run():
                 "}\n"
                 "flutter {\n"
                 "    source '../..'\n"
+                "}\n"
+                "dependencies {\n"
+                "    implementation 'androidx.core:core-ktx:1.12.0'\n"
                 "}\n",
+                encoding="utf-8",
+            )
+
+            # ── Project-level build.gradle ───────────────────────────
+            (project_dir / "android" / "build.gradle").write_text(
+                "buildscript {\n"
+                "    ext.kotlin_version = '1.9.22'\n"
+                "    repositories {\n"
+                "        google()\n"
+                "        mavenCentral()\n"
+                "    }\n"
+                "    dependencies {\n"
+                '        classpath "com.android.tools.build:gradle:8.1.4"\n'
+                "        classpath \"org.jetbrains.kotlin:kotlin-gradle-plugin:"
+                "$kotlin_version\"\n"
+                "    }\n"
+                "}\n"
+                "allprojects {\n"
+                "    repositories {\n"
+                "        google()\n"
+                "        mavenCentral()\n"
+                "    }\n"
+                "}\n"
+                "rootProject.buildDir = '../build'\n"
+                "subprojects {\n"
+                "    project.buildDir = \"${rootProject.buildDir}/${project.name}\"\n"
+                "}\n"
+                "subprojects {\n"
+                "    project.evaluationDependsOn(\":app\")\n"
+                "}\n"
+                "tasks.register(\"clean\", Delete) {\n"
+                "    delete rootProject.buildDir\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            # ── settings.gradle ──────────────────────────────────────
+            (project_dir / "android" / "settings.gradle").write_text(
+                "pluginManagement {\n"
+                "    def flutterSdkPath = {\n"
+                "        def properties = new Properties()\n"
+                '        file("local.properties").withInputStream '
+                "{ properties.load(it) }\n"
+                '        def sdk = properties.getProperty("flutter.sdk")\n'
+                "        assert sdk != null: "
+                '"flutter.sdk not set in local.properties"\n'
+                "        return sdk\n"
+                "    }()\n"
+                "    includeBuild(\"${flutterSdkPath}/packages/"
+                "flutter_tools/gradle\")\n"
+                "    repositories {\n"
+                "        google()\n"
+                "        mavenCentral()\n"
+                "        gradlePluginPortal()\n"
+                "    }\n"
+                "}\n"
+                "plugins {\n"
+                '    id "dev.flutter.flutter-plugin-loader" version "1.0.0"\n'
+                '    id "com.android.application" version "8.1.4" apply false\n'
+                '    id "org.jetbrains.kotlin.android" version "1.9.22" apply false\n'
+                "}\n"
+                'include ":app"\n',
+                encoding="utf-8",
+            )
+
+            # ── gradle.properties ────────────────────────────────────
+            (project_dir / "android" / "gradle.properties").write_text(
+                "org.gradle.jvmargs=-Xmx4G\n"
+                "android.useAndroidX=true\n"
+                "android.enableJetifier=true\n",
+                encoding="utf-8",
+            )
+
+            # ── gradle-wrapper.properties ────────────────────────────
+            (project_dir / "android" / "gradle" / "wrapper"
+             / "gradle-wrapper.properties").write_text(
+                "distributionBase=GRADLE_USER_HOME\n"
+                "distributionPath=wrapper/dists\n"
+                "zipStoreBase=GRADLE_USER_HOME\n"
+                "zipStorePath=wrapper/dists\n"
+                "distributionUrl=https\\\\://services.gradle.org/"
+                "distributions/gradle-8.3-all.zip\n",
+                encoding="utf-8",
+            )
+
+            # ── local.properties placeholder ─────────────────────────
+            (project_dir / "android" / "local.properties").write_text(
+                "# flutter.sdk ser\u00e1 definido pelo FlutterBuildOrchestrator\n",
                 encoding="utf-8",
             )
 
