@@ -892,15 +892,52 @@ def run():
                 return
             self.after(0, self._show_auto_validate_result, ok, msg)
 
+        def _migrate_provider(self, new_provider: str):
+            """Migra para provedor alternativo que funciona com esta chave."""
+            old = self.api_provider
+            self.api_provider = new_provider
+            self.api_provider_menu.set(new_provider)
+            self._save_state()
+            self.log.ok(
+                f"Provedor migrado automaticamente: {old} \u2192 {new_provider}"
+            )
+
         def _show_auto_validate_result(self, ok: bool, msg: str):
             if ok:
+                # Se conectou mas sem modelo funcional, tenta outros provedores
+                if "modelo:" not in msg and self.api_provider != "Ollama (local)":
+                    self.log.info(
+                        "Provedor atual sem modelo de chat — "
+                        "testando outros provedores..."
+                    )
+                    found = self._find_working_provider(self.api_key)
+                    if found:
+                        self._migrate_provider(found)
+                        w = self._auto_selected_models.get(found, "")
+                        msg = f"OK \u2014 migrado para {found}, modelo: {w}"
+                    else:
+                        msg += " (sem modelo de chat — tente outra chave)"
                 self.lbl_api_status.configure(
                     text=f"✓ {msg}", text_color="#4CAF50"
                 )
                 self.log.ok(f"{self.api_provider}: {msg}")
             else:
+                # Chave falhou no provedor atual — testa outros provedores
+                self.log.info(
+                    f"Chave inv\u00e1lida para {self.api_provider} — "
+                    "testando outros provedores..."
+                )
+                found = self._find_working_provider(self.api_key)
+                if found:
+                    self._migrate_provider(found)
+                    w = self._auto_selected_models.get(found, "")
+                    msg = f"OK \u2014 chave funciona com {found}, modelo: {w}"
+                    ok = True
+                else:
+                    msg = f"Chave n\u00e3o funciona com nenhum provedor"
                 self.lbl_api_status.configure(
-                    text=f"✗ {msg}", text_color="#FF5722"
+                    text=f"{'✓' if ok else '✗'} {msg}",
+                    text_color="#4CAF50" if ok else "#FF5722",
                 )
 
         def _save_api_key(self):
@@ -1096,6 +1133,98 @@ def run():
                     return bool(resp.get("choices"))
             except Exception:
                 return False
+
+        def _try_key_on_all_providers(self, key: str) -> list:
+            """Testa a chave contra TODOS os provedores. Retorna [(provider, models_count), ...]."""
+            results = []
+            providers_to_test = []
+
+            # Provedores OpenAI-compatible
+            for prov in self.OPENAI_COMPATIBLE:
+                providers_to_test.append((prov, "openai_compatible"))
+            providers_to_test.append(("OpenAI", "openai_compatible"))
+            providers_to_test.append(("Anthropic", "anthropic"))
+            providers_to_test.append(("OpenRouter", "openrouter"))
+            # Gemini testado separadamente via GeminiCodeFixer
+            providers_to_test.append(("Gemini", "gemini"))
+
+            # Custom providers
+            for prov in self._custom_providers:
+                providers_to_test.append((prov, "custom"))
+
+            for prov, ptype in providers_to_test:
+                try:
+                    if ptype == "gemini":
+                        from gui.gemini_fixer import GeminiCodeFixer
+                        ok, msg = GeminiCodeFixer.validate_key(key)
+                        if ok:
+                            results.append((prov, "gemini", 0))
+                        elif "modelos" in msg:
+                            results.append((prov, "gemini", 1))
+                    elif ptype == "anthropic":
+                        req = urllib.request.Request(
+                            "https://api.anthropic.com/v1/models",
+                            headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                        )
+                        with urllib.request.urlopen(req, timeout=8) as r:
+                            data = json.loads(r.read())
+                        models = data.get("data", [])
+                        results.append((prov, "anthropic", len(models)))
+                    elif ptype == "openrouter":
+                        req = urllib.request.Request(
+                            "https://openrouter.ai/api/v1/models",
+                            headers={"Authorization": f"Bearer {key}"},
+                        )
+                        with urllib.request.urlopen(req, timeout=8) as r:
+                            data = json.loads(r.read())
+                        models = data.get("data", [])
+                        results.append((prov, "openai", len(models)))
+                    elif ptype == "openai_compatible":
+                        base_url = self.OPENAI_COMPATIBLE[prov][0].rstrip("/")
+                        req = urllib.request.Request(
+                            f"{base_url}/models",
+                            headers={"Authorization": f"Bearer {key}"},
+                        )
+                        with urllib.request.urlopen(req, timeout=8) as r:
+                            data = json.loads(r.read())
+                        models = data.get("data", [])
+                        results.append((prov, "openai", len(models)))
+                    elif ptype == "custom":
+                        cfg = self._custom_providers.get(prov, {})
+                        url = cfg.get("url", "").rstrip("/")
+                        if not url:
+                            continue
+                        hdr = {cfg.get("auth_header", "Authorization"):
+                               f"{cfg.get('auth_prefix', 'Bearer ')}{key}"}
+                        models_url = url + "/models" if not url.endswith("/models") else url
+                        req = urllib.request.Request(models_url, headers=hdr)
+                        with urllib.request.urlopen(req, timeout=8) as r:
+                            data = json.loads(r.read())
+                        raw = data.get("data", data.get("models", []))
+                        results.append((prov, "openai", len(raw)))
+                except Exception:
+                    continue
+            return results
+
+        def _find_working_provider(self, key: str) -> Optional[str]:
+            """Testa chave contra TODOS os provedores at\u00e9 achar um com chat funcional."""
+            all_providers = self._try_key_on_all_providers(key)
+            # Prioridade: provedores com mais modelos primeiro
+            scored = []
+            for entry in all_providers:
+                prov = entry[0]
+                # Tenta auto-select model
+                working = self._auto_select_model(prov, key, force=True)
+                if working:
+                    scored.append((prov, working, 100))
+            if scored:
+                scored.sort(key=lambda x: -x[2])
+                best = scored[0]
+                self.log.ok(
+                    f"Chave funciona com {best[0]} (modelo: {best[1]})"
+                )
+                return best[0]
+            return None
 
         def _auto_select_model(self, provider: str, key: str,
                                 force: bool = False) -> Optional[str]:
