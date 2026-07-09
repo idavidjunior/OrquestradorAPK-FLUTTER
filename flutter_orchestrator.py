@@ -190,6 +190,9 @@ class FlutterBuildOrchestrator:
         self._last_fix_applied = None
         self._fix_cache = {}
         self._model_fallback_list = model_fallback_list or []
+        self._fallback_attempt = 0
+        self._consecutive_401 = 0
+        self._last_401_provider = None
 
     def _progress(self, percent: int, status: str):
         if self._progress_callback:
@@ -704,6 +707,9 @@ class FlutterBuildOrchestrator:
             return None
 
         cfg = self.AI_PROVIDER_CONFIG.get(self.api_provider)
+        self._fallback_attempt = 0
+        self._consecutive_401 = 0
+
         if not cfg:
             self.log(f"Provedor IA n\u00e3o configurado: {self.api_provider}", "WARNING")
             return None
@@ -889,21 +895,37 @@ class FlutterBuildOrchestrator:
                 "ERROR"
             )
             if http_code in (401, 402, 403):
+                if http_code == 401:
+                    cur = self.api_provider or "NVIDIA"
+                    if cur == self._last_401_provider:
+                        self._consecutive_401 += 1
+                    else:
+                        self._consecutive_401 = 1
+                        self._last_401_provider = cur
+                    if self._consecutive_401 >= 5:
+                        self.log(
+                            f"[IA] \u2716 {self._consecutive_401}x 401 consecutivos "
+                            f"em {cur} — chave sem permissão de inferência",
+                            "ERROR"
+                        )
+                        return None
                 remaining = [m for m in self._model_fallback_list
                              if m != model]
                 if remaining:
                     next_m = remaining[0]
                     self._model_fallback_list = remaining
                     self.api_model = next_m
+                    self._fallback_attempt += 1
                     remaining_count = len(remaining) - 1
                     self.log(
-                        f"[IA] \u21bb Fallback #{len(self._model_fallback_list) - remaining_count} "
+                        f"[IA] \u21bb Fallback #{self._fallback_attempt} "
                         f"\u2192 {next_m} ({remaining_count} restantes)",
                         "INFO"
                     )
                     self._progress(50, f"IA: fallback para {next_m}")
                     return self._ai_fix_code(errors, code, extra_files)
                 self.log("[IA] Todos os modelos de fallback esgotados", "ERROR")
+                self._consecutive_401 = 0
             return None
         except URLError as e:
             _elapsed = _time.time() - _t0

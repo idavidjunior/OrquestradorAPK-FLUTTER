@@ -935,25 +935,56 @@ class KnowledgeBase:
     def _fix_android_gradle_namespace(self, project_dir, errors, log):
         try:
             error_text = "\n".join(errors)
+            build_gradle_path = None
+
+            # 1. Try to extract path from error text (project build.gradle)
             match = re.search(
                 r'([A-Z]:\\[^:]+\\android\\build\.gradle)', error_text
             )
-            if not match:
-                log.warn("Não foi possível extrair caminho do build.gradle")
-                return False
+            if match:
+                build_gradle_path = Path(match.group(1))
 
-            build_gradle_path = Path(match.group(1))
-            if not build_gradle_path.exists():
+            # 2. If path not found, check if it's a plugin error (e.g. :on_audio_query_android)
+            if not build_gradle_path or not build_gradle_path.exists():
+                plugin_match = re.search(
+                    r"Project\s+':(\S+)'.*Namespace not specified", error_text
+                )
+                if not plugin_match:
+                    plugin_match = re.search(
+                        r"configure project\s+':(\S+)'", error_text
+                    )
+                if not plugin_match:
+                    # Try to find any build.gradle that lacks namespace in project
+                    for bg in Path(project_dir).rglob("**/android/build.gradle"):
+                        if "namespace" not in bg.read_text(encoding="utf-8", errors="ignore"):
+                            build_gradle_path = bg
+                            break
+                else:
+                    plugin_name = plugin_match.group(1)
+                    pub_cache = Path.home() / ".pub-cache" / "hosted"
+                    for bg in pub_cache.rglob(f"**/{plugin_name}/android/build.gradle"):
+                        if bg.exists():
+                            build_gradle_path = bg
+                            break
+
+            if not build_gradle_path or not build_gradle_path.exists():
+                log.warn("N\u00e3o foi poss\u00edvel localizar o build.gradle sem namespace")
                 return False
 
             content = build_gradle_path.read_text(encoding="utf-8")
             if "namespace" in content:
                 return False
 
+            # Find AndroidManifest.xml to extract package name
             manifest_path = (
                 build_gradle_path.parent / "src" / "main" / "AndroidManifest.xml"
             )
             if not manifest_path.exists():
+                manifest_path = (
+                    build_gradle_path.parent.parent / "src" / "main" / "AndroidManifest.xml"
+                )
+            if not manifest_path.exists():
+                log.warn(f"AndroidManifest.xml n\u00e3o encontrado junto a {build_gradle_path}")
                 return False
 
             manifest = manifest_path.read_text(encoding="utf-8")

@@ -551,8 +551,12 @@ def run():
 
                 lib_main = project_dir / "lib" / "main.dart"
                 lib_main.write_text(dart_code, encoding="utf-8")
-
                 self.log.info(f"main.dart: {len(dart_code.splitlines())} linhas")
+
+                widget_test = project_dir / "test" / "widget_test.dart"
+                if widget_test.exists():
+                    widget_test.unlink()
+                    self.log.info("widget_test.dart removido (c\u00f3digo colado \u00e9 independente)")
 
                 if pubspec_frag:
                     ProjectSourceManager._merge_pubspec_fragment(
@@ -1421,7 +1425,11 @@ def run():
                 working = self._auto_select_model(provider, key, force=True)
                 if working:
                     return True, (f"OK \u2014 modelo: {working}")
-                return True, f"Conectado (HTTP {resp_status})"
+                self._update_ai_status(
+                    "error",
+                    f"API responde (HTTP {resp_status}) mas nenhum modelo aceita a chave"
+                )
+                return False, "Nenhum modelo respondeu — chave sem permiss\u00e3o de infer\u00eancia?"
             except urllib.error.HTTPError as e:
                 _t1 = _time.time()
                 self._update_ai_status(
