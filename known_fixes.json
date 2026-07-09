@@ -2,8 +2,8 @@
   "_meta": {
     "version": "2.0",
     "description": "Cérebro do OrquestradorAPK — erros conhecidos e suas correções. Cresce automaticamente a cada novo erro resolvido.",
-    "total_fixes_applied": 3,
-    "last_updated": "2026-07-07"
+    "total_fixes_applied": 4,
+    "last_updated": "2026-07-09"
   },
   "fixes": [
     {
@@ -191,7 +191,7 @@
       "operations": [],
       "fix_hint": "O orquestrador irá adicionar automaticamente namespace ao build.gradle do plugin problemático",
       "explanation": "Plugins Android antigos não têm namespace declarado no build.gradle, exigido pelo AGP 8.0+.",
-      "times_applied": 0,
+      "times_applied": 1,
       "source": "manual"
     },
     {
@@ -1104,8 +1104,12 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_imports_top"},
-        {"action": "ensure_material_import"}
+        {
+          "action": "ensure_imports_top"
+        },
+        {
+          "action": "ensure_material_import"
+        }
       ],
       "explanation": "Imports em Dart devem estar no topo do arquivo, antes de qualquer código. O orquestrador move automaticamente imports soltos para o início.",
       "times_applied": 0,
@@ -1124,7 +1128,9 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "remove_duplicate_imports"}
+        {
+          "action": "remove_duplicate_imports"
+        }
       ],
       "explanation": "Imports duplicados podem causar warnings ou erros. O orquestrador remove linhas de import repetidas automaticamente.",
       "times_applied": 0,
@@ -1142,8 +1148,14 @@
       "context_patterns": [],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_main_function", "class_name": "MyApp"},
-        {"action": "ensure_run_app", "class_name": "MyApp"}
+        {
+          "action": "ensure_main_function",
+          "class_name": "MyApp"
+        },
+        {
+          "action": "ensure_run_app",
+          "class_name": "MyApp"
+        }
       ],
       "explanation": "Todo aplicativo Dart precisa de uma função main() como entry point. O orquestrador adiciona automaticamente main() com runApp().",
       "times_applied": 0,
@@ -1163,7 +1175,9 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_const_constructor"}
+        {
+          "action": "ensure_const_constructor"
+        }
       ],
       "explanation": "Widgets em Flutter devem ter const constructor para otimização. O orquestrador adiciona 'const X({super.key})' às classes widget.",
       "times_applied": 0,
@@ -1184,7 +1198,9 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_override_annotation"}
+        {
+          "action": "ensure_override_annotation"
+        }
       ],
       "explanation": "Métodos que sobrescrevem métodos da superclasse precisam de @override. O orquestrador adiciona @override antes de build().",
       "times_applied": 0,
@@ -1204,7 +1220,9 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_build_method"}
+        {
+          "action": "ensure_build_method"
+        }
       ],
       "explanation": "Widgets em Flutter precisam implementar o método build(). O orquestrador adiciona @override Widget build(BuildContext context) com retorno padrão.",
       "times_applied": 0,
@@ -1223,7 +1241,9 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_material_app_structure"}
+        {
+          "action": "ensure_material_app_structure"
+        }
       ],
       "explanation": "MaterialApp precisa de parâmetros como home e title. O orquestrador adiciona Scaffold como home se ausente.",
       "times_applied": 0,
@@ -1241,7 +1261,9 @@
       "context_patterns": [],
       "type": "structural_fix",
       "operations": [
-        {"action": "fix_unmatched_brackets"}
+        {
+          "action": "fix_unmatched_brackets"
+        }
       ],
       "explanation": "Chaves { } desbalanceadas causam erro de compilação. O orquestrador conta e adiciona ou remove chaves conforme necessário.",
       "times_applied": 0,
@@ -1258,7 +1280,9 @@
       "context_patterns": [],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_semicolons"}
+        {
+          "action": "ensure_semicolons"
+        }
       ],
       "explanation": "Statements em Dart precisam terminar com ;. O orquestrador adiciona ponto-e-vírgula onde necessário.",
       "times_applied": 0,
@@ -1275,7 +1299,9 @@
       "context_patterns": [],
       "type": "structural_fix",
       "operations": [
-        {"action": "reorder_sections"}
+        {
+          "action": "reorder_sections"
+        }
       ],
       "explanation": "Código Dart deve seguir ordem: imports, main(), classes. O orquestrador reorganiza seções automaticamente.",
       "times_applied": 0,
@@ -1294,7 +1320,9 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "remove_duplicate_classes"}
+        {
+          "action": "remove_duplicate_classes"
+        }
       ],
       "explanation": "Definições de classe duplicadas causam erro de compilação. O orquestrador remove a segunda definição mantendo a primeira.",
       "times_applied": 0,
@@ -1311,7 +1339,9 @@
       "context_patterns": [],
       "type": "structural_fix",
       "operations": [
-        {"action": "inline_code_outside_class"}
+        {
+          "action": "inline_code_outside_class"
+        }
       ],
       "explanation": "Código executável em Dart deve estar dentro de funções ou métodos. O orquestrador move código solto para dentro de main().",
       "times_applied": 0,
@@ -1330,7 +1360,9 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_scaffold_in_home"}
+        {
+          "action": "ensure_scaffold_in_home"
+        }
       ],
       "explanation": "O Scaffold é a estrutura base de layout do Material Design. O orquestrador envolve o home do MaterialApp com Scaffold.",
       "times_applied": 0,
@@ -1350,7 +1382,9 @@
       ],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_widget_structure"}
+        {
+          "action": "ensure_widget_structure"
+        }
       ],
       "explanation": "Scaffold precisa estar dentro de MaterialApp para funcionar corretamente. O orquestrador cria a estrutura MaterialApp ao redor do Scaffold.",
       "times_applied": 0,
@@ -1368,18 +1402,44 @@
       "context_patterns": [],
       "type": "restructure",
       "operations": [
-        {"action": "ensure_imports_top"},
-        {"action": "ensure_material_import"},
-        {"action": "remove_duplicate_imports"},
-        {"action": "ensure_main_function", "class_name": "MyApp"},
-        {"action": "ensure_run_app", "class_name": "MyApp"},
-        {"action": "ensure_const_constructor"},
-        {"action": "ensure_override_annotation"},
-        {"action": "ensure_build_method"},
-        {"action": "ensure_material_app_structure"},
-        {"action": "fix_unmatched_brackets"},
-        {"action": "ensure_semicolons"},
-        {"action": "reorder_sections"}
+        {
+          "action": "ensure_imports_top"
+        },
+        {
+          "action": "ensure_material_import"
+        },
+        {
+          "action": "remove_duplicate_imports"
+        },
+        {
+          "action": "ensure_main_function",
+          "class_name": "MyApp"
+        },
+        {
+          "action": "ensure_run_app",
+          "class_name": "MyApp"
+        },
+        {
+          "action": "ensure_const_constructor"
+        },
+        {
+          "action": "ensure_override_annotation"
+        },
+        {
+          "action": "ensure_build_method"
+        },
+        {
+          "action": "ensure_material_app_structure"
+        },
+        {
+          "action": "fix_unmatched_brackets"
+        },
+        {
+          "action": "ensure_semicolons"
+        },
+        {
+          "action": "reorder_sections"
+        }
       ],
       "explanation": "Aplica todas as correções estruturais conhecidas em sequência: imports, main(), construtor, override, build(), MaterialApp, brackets, semicolons e reordenação.",
       "times_applied": 0,
@@ -1433,7 +1493,9 @@
       "context_patterns": [],
       "type": "structural_fix",
       "operations": [
-        {"action": "ensure_common_imports"}
+        {
+          "action": "ensure_common_imports"
+        }
       ],
       "explanation": "O orquestrador analisa quais widgets/classes são usados no código e adiciona automaticamente os imports necessários (material, cupertino, http, provider, etc.).",
       "times_applied": 0,

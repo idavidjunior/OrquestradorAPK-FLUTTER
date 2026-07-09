@@ -588,7 +588,8 @@ class FlutterBuildOrchestrator:
                   build_number: Optional[str] = None,
                   _skip_gradle_check: bool = False) -> bool:
         mode = "release" if release else "debug"
-        self.log(f"Compilando APK ({mode})...", "STEP")
+        self.log("Compilando APK (" + mode + ")", "STEP")
+        self._progress(65, "Compilando APK (" + mode + ") - configurando Gradle...")
         try:
             cmd = [self.flutter_cmd, "build", "apk"]
             if release:
@@ -632,6 +633,81 @@ class FlutterBuildOrchestrator:
             return False
 
     # ── Artifacts ──────────────────────────────────────────────────────
+
+    
+    def _fix_plugin_namespaces(self):
+        """Proactively fix missing namespace in Android plugin build.gradle files after pub get."""
+        try:
+            pkg_config = self.project_path / ".dart_tool" / "package_config.json"
+            if not pkg_config.exists():
+                return
+            cfg = json.loads(pkg_config.read_text(encoding="utf-8"))
+            pkgs = cfg.get("packages", [])
+            fixed = 0
+            for pkg in pkgs:
+                root_uri = pkg.get("rootUri", "")
+                if not root_uri.startswith("file://"):
+                    continue
+                pkg_path = Path(root_uri.replace("file://", "").replace("/", os.sep))
+                bg_path = pkg_path / "android" / "build.gradle"
+                if not bg_path.exists():
+                    continue
+                try:
+                    bg_content = bg_path.read_text(encoding="utf-8", errors="ignore")
+                    if "namespace" in bg_content:
+                        continue
+                    manifest_path = pkg_path / "android" / "src" / "main" / "AndroidManifest.xml"
+                    if not manifest_path.exists():
+                        manifest_path = pkg_path / "src" / "main" / "AndroidManifest.xml"
+                    if not manifest_path.exists():
+                        continue
+                    manifest = manifest_path.read_text(encoding="utf-8")
+                    m = re.search(r'package="([^"]+)"', manifest)
+                    if not m:
+                        continue
+                    android_block = re.search(r"android\s*\{", bg_content)
+                    if not android_block:
+                        continue
+                    insert_pos = android_block.end()
+                    new_content = bg_content[:insert_pos] + '\n    namespace ' + m.group(1) + bg_content[insert_pos:]
+                    bg_path.write_text(new_content, encoding="utf-8")
+                    fixed += 1
+                except Exception:
+                    continue
+            if fixed:
+                self.log("Namespace adicionado em " + str(fixed) + " plugin(s) Android", "SUCCESS")
+        except Exception as e:
+            self.log("_fix_plugin_namespaces: " + str(e), "WARNING")
+
+    def _pre_build_ai_scan(self) -> bool:
+        """Send code to AI for pre-build analysis to catch issues early."""
+        if not self.api_key or not self.api_provider:
+            return True
+        main_dart = self.project_path / "lib" / "main.dart"
+        if not main_dart.exists():
+            return True
+        code = main_dart.read_text(encoding="utf-8")
+        fixed = self._ai_fix_code("Pre-build AI scan: analyze for potential compilation issues", code, {})
+        if fixed and fixed != code:
+            main_dart.write_text(fixed, encoding="utf-8")
+            self.log("IA corrigiu codigo preventivamente antes do build", "SUCCESS")
+            if self.kb_path:
+                self._learn_from_success("pre-build AI scan", fixed[:500])
+        return True
+
+    def _apply_pre_build_fixes(self) -> bool:
+        """Fix plugin namespaces + optional AI pre-scan before build."""
+        self.log("Aplicando correcoes pre-build...", "STEP")
+        self._fix_plugin_namespaces()
+        try:
+            subprocess.run(
+                [self.flutter_cmd, "pub", "get"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=120,
+            )
+        except Exception:
+            pass
+        self._pre_build_ai_scan()
+        return True
 
     def copy_artifacts(self) -> Optional[Path]:
         self.log("Copiando artifacts...", "STEP")
@@ -1153,10 +1229,12 @@ class FlutterBuildOrchestrator:
         self.log(f"Output: {self.output_dir}", "INFO")
 
         steps = [
-            ("Pr\u00e9-requisitos", lambda: self.check_prerequisites()),
-            ("Valida\u00e7\u00e3o", lambda: self.validate_flutter_project()),
-            ("Depend\u00eancias", lambda: self.get_dependencies()),
-            ("An\u00e1lise", lambda: self.analyze_code()),
+            ("Pré-requisitos", lambda: self.check_prerequisites()),
+            ("Validação", lambda: self.validate_flutter_project()),
+            ("Dependências", lambda: self.get_dependencies()),
+            ("Correção pré-build",
+             lambda: self._apply_pre_build_fixes()),
+            ("Análise", lambda: self.analyze_code()),
             ("Testes", lambda: self.run_tests(skip=skip_tests)),
             ("Build APK",
              lambda: self.build_apk(release=not debug, build_number=build_number)),
