@@ -16,6 +16,7 @@ import platform
 import re
 import zipfile
 import tarfile
+import winsound
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
@@ -193,6 +194,15 @@ class FlutterBuildOrchestrator:
         self._fallback_attempt = 0
         self._consecutive_401 = 0
         self._last_401_provider = None
+
+    class _LogAdapter:
+        """Adapta a fun\u00e7\u00e3o log(level, msg) da orchestrator para interface Logger (obj.ok/err/warn/info)."""
+        def __init__(self, log_fn):
+            self._log = log_fn
+        def ok(self, msg): self._log(msg, "SUCCESS")
+        def err(self, msg): self._log(msg, "ERROR")
+        def warn(self, msg): self._log(msg, "WARNING")
+        def info(self, msg): self._log(msg, "INFO")
 
     def _progress(self, percent: int, status: str):
         if self._progress_callback:
@@ -990,12 +1000,12 @@ class FlutterBuildOrchestrator:
         # Tenta corrigir via KnowledgeBase (erros estruturais, namespace, etc.)
         try:
             from gui.knowledge_base import KnowledgeBase
-            kb = KnowledgeBase(self.log)
+            kb = KnowledgeBase(self._LogAdapter(self.log))
             main_dart = self.project_path / "lib" / "main.dart"
             code = main_dart.read_text(encoding="utf-8") if main_dart.exists() else ""
             fixed, applied = kb.apply(code, [errors], project_dir=self.project_path)
             if applied:
-                self.log.ok(f"KnowledgeBase: {len(applied)} corre\u00e7\u00f5es aplicadas: {', '.join(applied)}")
+                self.log(f"KnowledgeBase: {len(applied)} corre\u00e7\u00f5es aplicadas: {', '.join(applied)}", "SUCCESS")
                 if fixed != code and main_dart.exists():
                     main_dart.write_text(fixed, encoding="utf-8")
                 return self._retry_build(release, build_number)
@@ -1094,30 +1104,38 @@ class FlutterBuildOrchestrator:
             return False
 
     def _learn_from_success(self, errors: str, fix_snippet: str):
-        """Persiste o par erro+corre\u00e7\u00e3o no known_fixes.json."""
+        """Persiste o par erro+corre\u00e7\u00e3o no known_fixes.json no formato da KnowledgeBase."""
         if not self.kb_path:
             return
         try:
-            fixes = []
+            db = {"fixes": []}
             if self.kb_path.exists():
-                fixes = json.loads(self.kb_path.read_text(encoding="utf-8"))
+                db = json.loads(self.kb_path.read_text(encoding="utf-8"))
+                if isinstance(db, list):
+                    db = {"fixes": db, "_meta": {"converted_from_flat": True}}
+            fixes = db.setdefault("fixes", [])
             entry = {
-                "error_pattern": errors[:200],
-                "fix_preview": fix_snippet[:200],
-                "provider": self.api_provider,
-                "timestamp": datetime.now().isoformat(),
-                "success_count": 1,
+                "id": "learned_" + hashlib.md5(errors[:100].encode()).hexdigest()[:8],
+                "description": f"Aprendido: {errors[:80]}...",
+                "error_patterns": [errors[:100]],
+                "context_patterns": [],
+                "type": "regex_replace",
+                "operations": [],
+                "fix_hint": fix_snippet[:200],
+                "explanation": "Corre\u00e7\u00e3o aprendida automaticamente ap\u00f3s sucesso da IA.",
+                "times_applied": 1,
+                "source": self.api_provider or "auto",
             }
-            # Evita duplicatas: se mesmo pattern j\u00e1 existe, incrementa contagem
             for existing in fixes:
-                if existing["error_pattern"] == entry["error_pattern"]:
-                    existing["success_count"] = existing.get("success_count", 1) + 1
-                    existing["timestamp"] = entry["timestamp"]
+                if isinstance(existing, dict) and existing.get("id") == entry["id"]:
+                    existing["times_applied"] = existing.get("times_applied", 1) + 1
                     break
             else:
                 fixes.append(entry)
+            db["_meta"] = db.get("_meta", {})
+            db["_meta"]["last_updated"] = datetime.now().strftime("%Y-%m-%d")
             self.kb_path.write_text(
-                json.dumps(fixes, indent=2, ensure_ascii=False), encoding="utf-8"
+                json.dumps(db, indent=2, ensure_ascii=False), encoding="utf-8"
             )
             self.log("Aprendizado salvo em known_fixes.json", "SUCCESS")
         except Exception as e:
@@ -1175,8 +1193,10 @@ class FlutterBuildOrchestrator:
         self.generate_build_report(apk_path, ok)
         if ok:
             self.log("BUILD CONCLU\u00cdDO COM SUCESSO!", "SUCCESS")
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
         else:
             self.log("BUILD FALHOU", "ERROR")
+            winsound.MessageBeep(winsound.MB_ICONHAND)
         return ok
 
 

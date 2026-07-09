@@ -106,6 +106,7 @@ def run():
             self.title("Flutter Build Orchestrator")
             self.geometry("1150x780")
             self.minsize(950, 650)
+            self.state("zoomed")
 
             self.project_dir = None
             self.orch = None
@@ -365,8 +366,10 @@ def run():
             )
             self.btn_select_adb.pack(fill="x", pady=2)
 
+            self._install_adb_var = ctk.BooleanVar(value=True)
             self.check_install_adb = ctk.CTkCheckBox(
                 util_frame, text="Instalar APK no dispositivo via ADB",
+                variable=self._install_adb_var, onvalue=True, offvalue=False,
             )
             self.check_install_adb.pack(fill="x", pady=2)
 
@@ -377,18 +380,18 @@ def run():
             )
             self.btn_open_output.pack(fill="x", pady=2)
 
-            # ── Right panel (log + progresso) ────────────────────────────
+            # ── Right panel (progresso + reestruturação + log) ──────────
             right = ctk.CTkFrame(self)
             right.grid(row=1, column=1, sticky="nsew", padx=(2, 5), pady=5)
-            right.grid_rowconfigure(2, weight=1)
+            right.grid_rowconfigure(3, weight=1)
             right.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(
-                right, text="Log de Build",
+                right, text="Progresso",
                 font=ctk.CTkFont(size=14, weight="bold"),
-            ).grid(row=0, column=0, pady=(5, 5))
+            ).grid(row=0, column=0, pady=(5, 2))
 
-            # -- Progresso (acima do log) --
+            # -- Barra de progresso --
             self.progress_bar = ctk.CTkProgressBar(right, height=16)
             self.progress_bar.grid(row=1, column=0, padx=10, pady=(2, 0), sticky="ew")
             self.progress_bar.set(0)
@@ -400,8 +403,23 @@ def run():
                 row=1, column=0, padx=10, pady=(18, 0), sticky="w"
             )
 
+            # -- Reestruturação ao vivo --
+            self.lbl_restructuring = ctk.CTkLabel(
+                right, text="", font=ctk.CTkFont(size=11),
+                text_color="#90CAF9",
+            )
+            self.lbl_restructuring.grid(
+                row=2, column=0, padx=10, pady=(2, 0), sticky="w"
+            )
+
+            # -- Log --
+            ctk.CTkLabel(
+                right, text="Log de Build",
+                font=ctk.CTkFont(size=14, weight="bold"),
+            ).grid(row=3, column=0, pady=(5, 2))
+
             self.log_text = ctk.CTkTextbox(right, state="disabled", wrap="word")
-            self.log_text.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+            self.log_text.grid(row=4, column=0, sticky="nsew", padx=5, pady=5)
 
             self.log = Logger(self.log_text)
             self.kb = KnowledgeBase(self.log)
@@ -526,18 +544,24 @@ def run():
 
         def _do_process_paste(self, raw: str):
             self._set_build_state(True)
+            def _rui(msg):
+                self.after(0, lambda m=msg: self.lbl_restructuring.configure(text=m))
             try:
                 ptype = self._detect_project_type(raw)
+                _rui(">> Detectado: " + ptype)
                 self.log.info(f"Tipo detectado: {ptype}")
 
+                _rui(">> Organizando codigo colado...")
                 dart_code, pubspec_frag, manifest_lines = (
                     ProjectSourceManager.organize_pasted_code(raw, self.log, kb=self.kb)
                 )
 
                 if not dart_code:
-                    self.log.err("N\u00e3o foi poss\u00edvel extrair c\u00f3digo Dart v\u00e1lido")
+                    self.log.err("Nao foi possivel extrair codigo Dart valido")
+                    _rui("ERRO: codigo Dart invalido")
                     return
 
+                _rui(">> Criando projeto Flutter...")
                 tmp_dir = Path(tempfile.mkdtemp(prefix="flutter_build_"))
                 project_dir = tmp_dir / "app"
                 self.log.info(f"Criando projeto em: {project_dir}")
@@ -563,9 +587,9 @@ def run():
                         self.log.warn(f"flutter create falhou ({r.returncode}): {err}")
                         raise Exception(err)
                 except subprocess.TimeoutExpired:
-                    self.log.warn("flutter create excedeu timeout, usando estrutura mínima")
+                    self.log.warn("flutter create excedeu timeout, usando estrutura minima")
                 except Exception as e:
-                    self.log.warn(f"flutter create falhou, usando estrutura mínima: {str(e)[:100]}")
+                    self.log.warn(f"flutter create falhou, usando estrutura minima: {str(e)[:100]}")
                 if not (project_dir / "pubspec.yaml").exists():
                     project_dir.mkdir(parents=True, exist_ok=True)
                     (project_dir / "lib").mkdir(exist_ok=True)
@@ -573,6 +597,7 @@ def run():
 
                 self._ensure_local_properties(project_dir)
 
+                _rui(">> Escrevendo main.dart...")
                 lib_main = project_dir / "lib" / "main.dart"
                 lib_main.write_text(dart_code, encoding="utf-8")
                 self.log.info(f"main.dart: {len(dart_code.splitlines())} linhas")
@@ -580,8 +605,9 @@ def run():
                 widget_test = project_dir / "test" / "widget_test.dart"
                 if widget_test.exists():
                     widget_test.unlink()
-                    self.log.info("widget_test.dart removido (c\u00f3digo colado \u00e9 independente)")
+                    self.log.info("widget_test.dart removido (codigo colado e independente)")
 
+                _rui(">> Mesclando dependencias...")
                 if pubspec_frag:
                     ProjectSourceManager._merge_pubspec_fragment(
                         project_dir, pubspec_frag, self.log
@@ -592,23 +618,26 @@ def run():
                         project_dir, manifest_lines, self.log
                     )
 
+                _rui(">> Detectando e injetando deps...")
                 ProjectSourceManager.inject_deps(
                     dart_code, project_dir, self.log, kb=self.kb
                 )
 
+                _rui(">> Validando pubspec.yaml...")
                 ProjectSourceManager.validate_and_fix_pubspec(
                     project_dir, self.log
                 )
 
                 self.project_dir = project_dir
                 self._save_state()
+                _rui("OK: Projeto preparado com sucesso!")
                 self.log.ok(f"Projeto preparado em: {project_dir}")
-                self.log.info("Voc\u00ea j\u00e1 pode iniciar o build!")
-
+                self.log.info("Voce ja pode iniciar o build!")
             except Exception as e:
-                self.log.err(f"Erro ao processar c\u00f3digo: {e}")
+                self.log.err(f"Erro ao processar codigo: {e}")
             finally:
                 self._set_build_state(False)
+                self.after(100, lambda: self.lbl_restructuring.configure(text=""))
 
         def _ensure_local_properties(self, project_dir):
             """Escreve local.properties válido e salva flutter path."""
@@ -873,7 +902,7 @@ def run():
                 self.log.info(f"[IA ◉ {tag}] {detail}")
 
         def _schedule_ai_health_check(self):
-            """Testa periodicamente a conexão com a IA (a cada 60s se configurada)."""
+            """Testa silenciosamente (log apenas em mudanca de status, 60s)."""
             if not self.api_key:
                 self.after(60000, self._schedule_ai_health_check)
                 return
@@ -884,19 +913,13 @@ def run():
                 return
             import time as _time
             start = _time.time()
-            self._update_ai_status("testing", f"Health-check: {provider}/{model}...")
+            prev = getattr(self, "_health_prev_ok", None)
             ok = self._test_chat_model(provider, self.api_key, model)
             elapsed = (_time.time() - start) * 1000
-            if ok:
-                self._update_ai_status(
-                    "connected",
-                    f"Health-check OK | {provider}/{model} | {elapsed:.0f}ms"
-                )
-            else:
-                self._update_ai_status(
-                    "error",
-                    f"Health-check falhou | {provider}/{model} | {elapsed:.0f}ms"
-                )
+            if ok != prev:
+                detail = "Health-check " + ("OK" if ok else "FALHOU") + f" | {provider}/{model} | {elapsed:.0f}ms"
+                self._update_ai_status("connected" if ok else "error", detail)
+                self._health_prev_ok = ok
             self.after(60000, self._schedule_ai_health_check)
 
         def _add_custom_provider(self):
