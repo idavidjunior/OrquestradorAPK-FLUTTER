@@ -707,9 +707,6 @@ class FlutterBuildOrchestrator:
             return None
 
         cfg = self.AI_PROVIDER_CONFIG.get(self.api_provider)
-        self._fallback_attempt = 0
-        self._consecutive_401 = 0
-
         if not cfg:
             self.log(f"Provedor IA n\u00e3o configurado: {self.api_provider}", "WARNING")
             return None
@@ -990,6 +987,21 @@ class FlutterBuildOrchestrator:
             if content:
                 files[key] = content
 
+        # Tenta corrigir via KnowledgeBase (erros estruturais, namespace, etc.)
+        try:
+            from gui.knowledge_base import KnowledgeBase
+            kb = KnowledgeBase(self.log)
+            main_dart = self.project_path / "lib" / "main.dart"
+            code = main_dart.read_text(encoding="utf-8") if main_dart.exists() else ""
+            fixed, applied = kb.apply(code, [errors], project_dir=self.project_path)
+            if applied:
+                self.log.ok(f"KnowledgeBase: {len(applied)} corre\u00e7\u00f5es aplicadas: {', '.join(applied)}")
+                if fixed != code and main_dart.exists():
+                    main_dart.write_text(fixed, encoding="utf-8")
+                return self._retry_build(release, build_number)
+        except Exception as kb_err:
+            self.log(f"KnowledgeBase: {kb_err}", "WARNING")
+
         cache_parts = errors[:500]
         for k, v in files.items():
             cache_parts += k + v[:500]
@@ -1036,6 +1048,8 @@ class FlutterBuildOrchestrator:
             return False
 
         code = main_dart.read_text(encoding="utf-8")
+        self._fallback_attempt = 0
+        self._consecutive_401 = 0
         fixed = self._ai_fix_code(errors, code, files)
         if not fixed:
             return False

@@ -75,6 +75,22 @@ def run():
             "AI21 Labs":   ("https://api.ai21.com/studio/v1",      "jamba-1.5-mini"),
         }
 
+        PROVIDER_KEY_URLS = {
+            "Gemini":       "https://aistudio.google.com/app/apikey",
+            "OpenAI":       "https://platform.openai.com/api-keys",
+            "Anthropic":    "https://console.anthropic.com/settings/keys",
+            "DeepSeek":     "https://platform.deepseek.com/api_keys",
+            "Mistral AI":   "https://console.mistral.ai/api-keys/",
+            "Groq":         "https://console.groq.com/keys",
+            "Together AI":  "https://api.together.xyz/settings/api-keys",
+            "NVIDIA":       "https://build.nvidia.com/explore/discover",
+            "Perplexity":   "https://www.perplexity.ai/settings/api",
+            "Cohere":       "https://dashboard.cohere.com/api-keys",
+            "xAI (Grok)":   "https://console.x.ai/",
+            "AI21 Labs":    "https://www.ai21.com/settings/api-keys",
+            "OpenRouter":   "https://openrouter.ai/settings/keys",
+        }
+
         COMMON_ADB_PATHS = [
             Path(os.environ.get("LOCALAPPDATA", "C:\\")) / "Android" / "Sdk" / "platform-tools" / "adb.exe",
             Path(os.environ.get("ANDROID_HOME", "")) / "platform-tools" / "adb.exe",
@@ -268,6 +284,14 @@ def run():
                 left, text="", font=ctk.CTkFont(size=11),
             )
             self.lbl_api_status.grid(row=r, column=0, padx=10, pady=(0, 2), sticky="w"); r += 1
+
+            self.btn_get_key = ctk.CTkButton(
+                left, text="\u2197 Obter chave", fg_color="transparent",
+                text_color="#64B5F6", hover_color="#1A237E",
+                font=ctk.CTkFont(size=11, underline=True),
+                command=self._open_provider_key_url,
+            )
+            self.btn_get_key.grid(row=r, column=0, padx=10, pady=(0, 2), sticky="w"); r += 1
 
             api_btn_row = ctk.CTkFrame(left, fg_color="transparent")
             api_btn_row.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
@@ -1048,6 +1072,15 @@ def run():
                 f"(termina em ...{key[-4:]})"
             )
 
+        def _open_provider_key_url(self):
+            provider = self.api_provider
+            url = self.PROVIDER_KEY_URLS.get(provider)
+            if not url:
+                url = "https://www.google.com/search?q=" + provider.replace(" ", "+") + "+API+key"
+            import webbrowser
+            webbrowser.open(url)
+            self.log.info(f"Link aberto: {url}")
+
         def _validate_api_key(self):
             key = self.api_key_entry.get().strip()
             if not key:
@@ -1083,16 +1116,23 @@ def run():
 
             if ok:
                 self.lbl_api_status.configure(
-                    text=f"✓ {msg}", text_color="#4CAF50"
+                    text=f"\u2713 {msg}", text_color="#4CAF50"
                 )
                 self._update_ai_status("connected", msg)
+                self.btn_get_key.grid_remove()
                 messagebox.showinfo("Sucesso", msg)
             else:
                 self.lbl_api_status.configure(
-                    text=f"✗ {msg}", text_color="#FF5722"
+                    text=f"\u2717 {msg}", text_color="#FF5722"
                 )
                 self._update_ai_status("error", msg)
-                messagebox.showerror("Erro", msg)
+                self.btn_get_key.grid()
+                if messagebox.askyesno(
+                    "Chave inv\u00e1lida",
+                    f"A chave n\u00e3o funciona com {self.api_provider}.\n\n"
+                    "Deseja abrir o navegador para obter uma nova chave?"
+                ):
+                    self._open_provider_key_url()
 
         def _validate_openai_key(self, key: str):
             return self._validate_openai_compatible(key, "OpenAI",

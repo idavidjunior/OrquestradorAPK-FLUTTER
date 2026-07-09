@@ -130,8 +130,10 @@ class KnowledgeBase:
                 pat.lower() in error_text.lower()
                 for pat in fix.get("error_patterns", [])
             )
-            context_match = all(
-                pat in code for pat in fix.get("context_patterns", [])
+            ctx_pats = fix.get("context_patterns", [])
+            context_match = (
+                all(pat in code for pat in ctx_pats) or
+                all(pat in error_text for pat in ctx_pats)
             )
             if not (error_match and context_match):
                 continue
