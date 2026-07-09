@@ -151,6 +151,11 @@ class FlutterBuildOrchestrator:
         str(Path.home() / "tools" / "flutter"),
         str(Path.home() / "src" / "flutter"),
         str(Path.home() / "sdk" / "flutter"),
+        str(Path.home() / ".flutter_auto" / "flutter"),
+        str(Path.home() / "AppData" / "Local" / "flutter"),
+        str(Path.home() / "AppData" / "Local" / "Android" / "flutter"),
+        os.environ.get("LOCALAPPDATA", "") + "\\flutter",
+        os.environ.get("LOCALAPPDATA", "") + "\\Android\\flutter",
     ]
 
     def __init__(self, project_path: str,
@@ -242,35 +247,35 @@ class FlutterBuildOrchestrator:
         self.log("Verificando pr\u00e9-requisitos...", "STEP")
         all_ok = True
 
-        # Flutter
-        try:
-            result = subprocess.run(
-                [self.flutter_cmd, "--version"],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode == 0:
-                v = result.stdout.split("\n")[0]
-                self.log(f"Flutter: {v}", "SUCCESS")
-            else:
+        # Flutter — loop em vez de recursão para evitar estouro de pilha
+        for _ in range(3):
+            try:
+                result = subprocess.run(
+                    [self.flutter_cmd, "--version"],
+                    capture_output=True, text=True, timeout=30
+                )
+                if result.returncode == 0:
+                    v = result.stdout.split("\n")[0]
+                    self.log(f"Flutter: {v}", "SUCCESS")
+                    break
                 raise Exception("Flutter --version falhou")
-        except (FileNotFoundError, Exception):
-            # Tenta localizar em locais comuns
-            found = self._find_flutter_path()
-            if found and found != self.flutter_cmd:
-                self.flutter_cmd = found
-                bin_dir = str(Path(found).parent)
-                # Gera local.properties com o SDK rec\u00e9m-descoberto
-                self.install_dir = Path(found).parent.parent
-                self._write_local_properties()
-                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
-                self.log(f"Flutter localizado: {found}", "SUCCESS")
-                return self.check_prerequisites()
-            self.log("Flutter n\u00e3o encontrado", "ERROR")
-            if self.auto_install:
-                self.log("Auto-instala\u00e7\u00e3o ativada...", "INFO")
-                if self._install_flutter():
-                    return self.check_prerequisites()
-            all_ok = False
+            except (FileNotFoundError, Exception):
+                found = self._find_flutter_path()
+                if found and found != self.flutter_cmd:
+                    self.flutter_cmd = found
+                    bin_dir = str(Path(found).parent)
+                    self.install_dir = Path(found).parent.parent
+                    self._write_local_properties()
+                    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+                    self.log(f"Flutter localizado: {found}", "SUCCESS")
+                    continue
+                if self.auto_install:
+                    self.log("Auto-instala\u00e7\u00e3o ativada...", "INFO")
+                    if self._install_flutter():
+                        continue
+                self.log("Flutter n\u00e3o encontrado", "ERROR")
+                all_ok = False
+                break
 
         # Git
         try:

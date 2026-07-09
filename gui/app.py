@@ -346,27 +346,10 @@ def run():
             )
             self.btn_open_output.pack(fill="x", pady=2)
 
-            # -- Progresso --
-            ctk.CTkLabel(
-                left, text="Progresso",
-                font=ctk.CTkFont(size=14, weight="bold"),
-            ).grid(row=r, column=0, pady=(8, 2), sticky="w"); r += 1
-
-            self.progress_bar = ctk.CTkProgressBar(left, height=16)
-            self.progress_bar.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
-            self.progress_bar.set(0)
-
-            self.lbl_progress_status = ctk.CTkLabel(
-                left, text="", font=ctk.CTkFont(size=11),
-            )
-            self.lbl_progress_status.grid(
-                row=r, column=0, padx=10, pady=(0, 2), sticky="w"
-            ); r += 1
-
-            # ── Right panel (log) ──────────────────────────────────────
+            # ── Right panel (log + progresso) ────────────────────────────
             right = ctk.CTkFrame(self)
             right.grid(row=1, column=1, sticky="nsew", padx=(2, 5), pady=5)
-            right.grid_rowconfigure(1, weight=1)
+            right.grid_rowconfigure(2, weight=1)
             right.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(
@@ -374,8 +357,20 @@ def run():
                 font=ctk.CTkFont(size=14, weight="bold"),
             ).grid(row=0, column=0, pady=(5, 5))
 
+            # -- Progresso (acima do log) --
+            self.progress_bar = ctk.CTkProgressBar(right, height=16)
+            self.progress_bar.grid(row=1, column=0, padx=10, pady=(2, 0), sticky="ew")
+            self.progress_bar.set(0)
+
+            self.lbl_progress_status = ctk.CTkLabel(
+                right, text="", font=ctk.CTkFont(size=11),
+            )
+            self.lbl_progress_status.grid(
+                row=1, column=0, padx=10, pady=(18, 0), sticky="w"
+            )
+
             self.log_text = ctk.CTkTextbox(right, state="disabled", wrap="word")
-            self.log_text.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+            self.log_text.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
 
             self.log = Logger(self.log_text)
             self.kb = KnowledgeBase(self.log)
@@ -516,18 +511,36 @@ def run():
                 project_dir = tmp_dir / "app"
                 self.log.info(f"Criando projeto em: {project_dir}")
 
+                flutter_create_exe = "flutter"
+                if hasattr(self, '_orch_flutter_path') and self._orch_flutter_path:
+                    flutter_create_exe = self._orch_flutter_path
+                else:
+                    from flutter_orchestrator import FlutterBuildOrchestrator
+                    f_path = FlutterBuildOrchestrator._find_flutter_path()
+                    if f_path:
+                        flutter_create_exe = f_path
+                        self._orch_flutter_path = f_path
                 try:
-                    subprocess.run(
-                        ["flutter", "create", "--project-name", "app",
+                    r = subprocess.run(
+                        [flutter_create_exe, "create", "--project-name", "app",
                          "--org", "com.temp", "--platforms", "android",
                          str(project_dir)],
                         capture_output=True, text=True, timeout=120,
                     )
-                except Exception:
-                    self.log.warn("flutter create falhou, usando estrutura m\u00ednima")
+                    if r.returncode != 0:
+                        err = r.stderr[:200] if r.stderr else r.stdout[:200]
+                        self.log.warn(f"flutter create falhou ({r.returncode}): {err}")
+                        raise Exception(err)
+                except subprocess.TimeoutExpired:
+                    self.log.warn("flutter create excedeu timeout, usando estrutura mínima")
+                except Exception as e:
+                    self.log.warn(f"flutter create falhou, usando estrutura mínima: {str(e)[:100]}")
+                if not (project_dir / "pubspec.yaml").exists():
                     project_dir.mkdir(parents=True, exist_ok=True)
                     (project_dir / "lib").mkdir(exist_ok=True)
                     self._write_minimal_project(project_dir)
+
+                self._ensure_local_properties(project_dir)
 
                 lib_main = project_dir / "lib" / "main.dart"
                 lib_main.write_text(dart_code, encoding="utf-8")
@@ -561,6 +574,28 @@ def run():
                 self.log.err(f"Erro ao processar c\u00f3digo: {e}")
             finally:
                 self._set_build_state(False)
+
+        def _ensure_local_properties(self, project_dir):
+            """Escreve local.properties válido e salva flutter path."""
+            lp = project_dir / "android" / "local.properties"
+            from flutter_orchestrator import FlutterBuildOrchestrator
+            f = FlutterBuildOrchestrator._find_flutter_path()
+            if f:
+                self._orch_flutter_path = f
+                flutter_sdk = str(Path(f).parent.parent)
+                android_home = os.environ.get(
+                    "ANDROID_HOME",
+                    str(Path.home() / "AppData" / "Local" / "Android" / "Sdk")
+                )
+                lp.write_text(
+                    f"sdk.dir={android_home}\n"
+                    f"flutter.sdk={flutter_sdk}\n"
+                    f"flutter.buildMode=release\n"
+                    f"flutter.versionName=1.0.0\n"
+                    f"flutter.versionCode=1\n",
+                    encoding="utf-8",
+                )
+                self.log.ok(f"local.properties gerado com flutter.sdk={flutter_sdk}")
 
         @staticmethod
         def _write_minimal_project(project_dir: Path):
@@ -765,7 +800,7 @@ def run():
 
             # ── local.properties placeholder ─────────────────────────
             (project_dir / "android" / "local.properties").write_text(
-                "# flutter.sdk ser\u00e1 definido pelo FlutterBuildOrchestrator\n",
+                "# flutter.sdk será definido pelo FlutterBuildOrchestrator\n",
                 encoding="utf-8",
             )
 
@@ -1544,14 +1579,24 @@ def run():
                 result["available"] = len(devices) > 0
                 result["device"] = devices[0] if devices else ""
             except FileNotFoundError:
-                # Tenta localizar ADB automaticamente
                 found = self._find_adb_path()
                 if found and found != self._adb_path:
                     self._adb_path = found
                     self.log.ok(f"ADB localizado automaticamente: {Path(found).name}")
-                    # Reexecuta no pr\u00f3ximo ciclo
+                    try:
+                        r = self._adb_cmd("devices")
+                        lines = r.stdout.strip().split("\n")
+                        devices = [
+                            l.split("\t")[0]
+                            for l in lines[1:]
+                            if l.strip() and "device" in l and "unauthorized" not in l
+                        ]
+                        result["available"] = len(devices) > 0
+                        result["device"] = devices[0] if devices else ""
+                    except Exception:
+                        result["error"] = "ADB encontrado mas falhou ao listar devices"
                 else:
-                    result["error"] = "ADB n\u00e3o encontrado — use 'Selecionar ADB manualmente'"
+                    result["error"] = "ADB não encontrado — use 'Selecionar ADB manualmente'"
             except Exception as e:
                 result["error"] = str(e)[:60]
 
