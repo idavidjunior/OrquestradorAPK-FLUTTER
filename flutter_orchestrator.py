@@ -739,8 +739,16 @@ class FlutterBuildOrchestrator:
             "IMPORTANTE: Inclua APENAS arquivos que precisam de corre\u00e7\u00e3o."
         )
 
-        self.log(f"Enviando erros para {self.api_provider}...", "INFO")
-        self._progress(50, f"IA ({self.api_provider}): corrigindo erros...")
+        payload_bytes = len(prompt.encode("utf-8"))
+        self.log(
+            f"[IA] {self.api_provider} \u2192 modelo: {model} "
+            f"| payload: {payload_bytes} bytes",
+            "INFO"
+        )
+        self._progress(50, f"IA ({self.api_provider}/{model}): corrigindo erros...")
+
+        import time as _time
+        _t0 = _time.time()
 
         try:
             if cfg["type"] == "gemini":
@@ -787,20 +795,37 @@ class FlutterBuildOrchestrator:
             with urlopen(req, timeout=90) as r:
                 resp = json.loads(r.read())
 
+            _elapsed = _time.time() - _t0
+
             if cfg["type"] == "gemini":
                 text = (resp.get("candidates", [{}])[0]
                         .get("content", {})
                         .get("parts", [{}])[0]
                         .get("text", ""))
+                usage = resp.get("usageMetadata", {})
+                in_tok = usage.get("promptTokenCount", 0)
+                out_tok = usage.get("candidatesTokenCount", 0)
             elif cfg["type"] == "anthropic":
                 text = (resp.get("content", [{}])[0]
                         .get("text", ""))
+                usage = resp.get("usage", {})
+                in_tok = usage.get("input_tokens", 0)
+                out_tok = usage.get("output_tokens", 0)
             else:
                 text = (resp.get("choices", [{}])[0]
                         .get("message", {})
                         .get("content", ""))
+                usage = resp.get("usage", {})
+                in_tok = usage.get("prompt_tokens", 0)
+                out_tok = usage.get("completion_tokens", 0)
 
             fixed = text.strip()
+            self.log(
+                f"[IA] Resposta em {_elapsed:.1f}s "
+                f"| {len(fixed)} chars "
+                f"| in: {in_tok} out: {out_tok} tokens",
+                "SUCCESS"
+            )
 
             # Parse multi-file output: ARQUIVO: path\n```\ncontent\n```
             file_fixes = {}
@@ -857,8 +882,12 @@ class FlutterBuildOrchestrator:
         except HTTPError as e:
             http_code = e.code
             reason = str(e.reason)[:100] if e.reason else ""
-            self.log(f"IA: HTTP {http_code} com modelo {model}", "ERROR")
-            # Tenta fallback para outro modelo se 401/402/403
+            _elapsed = _time.time() - _t0
+            self.log(
+                f"[IA] \u2716 {model} HTTP {http_code} ({_elapsed:.1f}s)"
+                f"{': ' + reason if reason else ''}",
+                "ERROR"
+            )
             if http_code in (401, 402, 403):
                 remaining = [m for m in self._model_fallback_list
                              if m != model]
@@ -866,15 +895,28 @@ class FlutterBuildOrchestrator:
                     next_m = remaining[0]
                     self._model_fallback_list = remaining
                     self.api_model = next_m
-                    self.log(f"Tentando fallback para modelo: {next_m}...", "INFO")
+                    remaining_count = len(remaining) - 1
+                    self.log(
+                        f"[IA] \u21bb Fallback #{len(self._model_fallback_list) - remaining_count} "
+                        f"\u2192 {next_m} ({remaining_count} restantes)",
+                        "INFO"
+                    )
                     self._progress(50, f"IA: fallback para {next_m}")
                     return self._ai_fix_code(errors, code, extra_files)
-                self.log("Todos os modelos de fallback esgotados", "ERROR")
+                self.log("[IA] Todos os modelos de fallback esgotados", "ERROR")
             return None
         except URLError as e:
-            self.log(f"Erro de conex\u00e3o com IA: {e.reason[:100]}", "ERROR")
+            _elapsed = _time.time() - _t0
+            self.log(
+                f"[IA] \u2716 Erro de conex\u00e3o ({_elapsed:.1f}s): {e.reason[:100]}",
+                "ERROR"
+            )
         except Exception as e:
-            self.log(f"Erro na chamada IA: {str(e)[:150]}", "ERROR")
+            _elapsed = _time.time() - _t0
+            self.log(
+                f"[IA] \u2716 Exce\u00e7\u00e3o ({_elapsed:.1f}s): {str(e)[:150]}",
+                "ERROR"
+            )
         return None
 
     def _read_file_safe(self, *parts) -> Optional[str]:

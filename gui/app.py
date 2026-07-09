@@ -114,6 +114,7 @@ def run():
             self._build_ui()
             self._load_state()
             self._start_adb_poll()
+            self.after(5000, self._schedule_ai_health_check)
             self.log.ok("GUI pronta \u2014 selecione/cole um projeto para come\u00e7ar")
 
         # ==================================================================
@@ -238,6 +239,7 @@ def run():
             provider_frame.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
             provider_frame.grid_columnconfigure(0, weight=1)
             provider_frame.grid_columnconfigure(1, weight=2)
+            provider_frame.grid_columnconfigure(2, weight=0)
 
             ctk.CTkLabel(provider_frame, text="Provedor:").grid(
                 row=0, column=0, sticky="w", padx=(0, 5)
@@ -249,6 +251,11 @@ def run():
             )
             self.api_provider_menu.grid(row=0, column=1, sticky="ew")
             self.api_provider_menu.set("Gemini")
+
+            self.lbl_ai_live_status = ctk.CTkLabel(
+                provider_frame, text="◉", font=ctk.CTkFont(size=16), text_color="#888",
+            )
+            self.lbl_ai_live_status.grid(row=0, column=2, padx=(5, 0))
 
             self.api_key_entry = ctk.CTkEntry(
                 left, placeholder_text="Cole sua chave de API aqui..."
@@ -815,6 +822,55 @@ def run():
             self.api_provider = choice
             self.log.info(f"Provedor de API selecionado: {choice}")
 
+        def _update_ai_status(self, status: str, detail: str = ""):
+            """Atualiza indicador visual ◉ e opcionalmente loga detalhe.
+            status: idle(gray), testing(yellow), connected(green), error(red)
+            """
+            colors = {
+                "idle": "#888888",
+                "testing": "#FFA000",
+                "connected": "#4CAF50",
+                "error": "#FF5722",
+            }
+            labels = {
+                "idle": "ocioso",
+                "testing": "testando...",
+                "connected": "conectado",
+                "error": "falha",
+            }
+            color = colors.get(status, "#888888")
+            self.lbl_ai_live_status.configure(text_color=color)
+            if detail:
+                tag = labels.get(status, status)
+                self.log.info(f"[IA ◉ {tag}] {detail}")
+
+        def _schedule_ai_health_check(self):
+            """Testa periodicamente a conexão com a IA (a cada 60s se configurada)."""
+            if not self.api_key:
+                self.after(60000, self._schedule_ai_health_check)
+                return
+            provider = self.api_provider
+            model = self._auto_selected_models.get(provider, "")
+            if not model:
+                self.after(60000, self._schedule_ai_health_check)
+                return
+            import time as _time
+            start = _time.time()
+            self._update_ai_status("testing", f"Health-check: {provider}/{model}...")
+            ok = self._test_chat_model(provider, self.api_key, model)
+            elapsed = (_time.time() - start) * 1000
+            if ok:
+                self._update_ai_status(
+                    "connected",
+                    f"Health-check OK | {provider}/{model} | {elapsed:.0f}ms"
+                )
+            else:
+                self._update_ai_status(
+                    "error",
+                    f"Health-check falhou | {provider}/{model} | {elapsed:.0f}ms"
+                )
+            self.after(60000, self._schedule_ai_health_check)
+
         def _add_custom_provider(self):
             dialogo = ctk.CTkToplevel(self)
             dialogo.title("Adicionar Provedor Personalizado")
@@ -903,6 +959,7 @@ def run():
 
         def _do_auto_validate(self):
             provider = self.api_provider
+            self._update_ai_status("testing", f"Auto-validando chave {provider}...")
             if provider == "Gemini":
                 from gui.gemini_fixer import GeminiCodeFixer
                 ok, msg = GeminiCodeFixer.validate_key(self.api_key)
@@ -939,11 +996,10 @@ def run():
 
         def _show_auto_validate_result(self, ok: bool, msg: str):
             if ok:
-                # Se conectou mas sem modelo funcional, tenta outros provedores
                 if "modelo:" not in msg and self.api_provider != "Ollama (local)":
-                    self.log.info(
-                        "Provedor atual sem modelo de chat — "
-                        "testando outros provedores..."
+                    self._update_ai_status(
+                        "testing",
+                        "Provedor sem modelo de chat — testando outros provedores..."
                     )
                     found = self._find_working_provider(self.api_key)
                     if found:
@@ -955,12 +1011,11 @@ def run():
                 self.lbl_api_status.configure(
                     text=f"✓ {msg}", text_color="#4CAF50"
                 )
-                self.log.ok(f"{self.api_provider}: {msg}")
+                self._update_ai_status("connected", f"{self.api_provider}: {msg}")
             else:
-                # Chave falhou no provedor atual — testa outros provedores
-                self.log.info(
-                    f"Chave inv\u00e1lida para {self.api_provider} — "
-                    "testando outros provedores..."
+                self._update_ai_status(
+                    "testing",
+                    "Chave inválida — testando outros provedores..."
                 )
                 found = self._find_working_provider(self.api_key)
                 if found:
@@ -968,8 +1023,10 @@ def run():
                     w = self._auto_selected_models.get(found, "")
                     msg = f"OK \u2014 chave funciona com {found}, modelo: {w}"
                     ok = True
+                    self._update_ai_status("connected", msg)
                 else:
                     msg = f"Chave n\u00e3o funciona com nenhum provedor"
+                    self._update_ai_status("error", msg)
                 self.lbl_api_status.configure(
                     text=f"{'✓' if ok else '✗'} {msg}",
                     text_color="#4CAF50" if ok else "#FF5722",
@@ -995,7 +1052,7 @@ def run():
             self.api_key = key
 
             provider = self.api_provider
-            self.log.info(f"Validando chave {provider}...")
+            self._update_ai_status("testing", f"Validando chave {provider}...")
 
             if provider == "Gemini":
                 from gui.gemini_fixer import GeminiCodeFixer
@@ -1024,14 +1081,14 @@ def run():
                 self.lbl_api_status.configure(
                     text=f"✓ {msg}", text_color="#4CAF50"
                 )
+                self._update_ai_status("connected", msg)
                 messagebox.showinfo("Sucesso", msg)
-                self.log.ok(f"{provider}: {msg}")
             else:
                 self.lbl_api_status.configure(
                     text=f"✗ {msg}", text_color="#FF5722"
                 )
+                self._update_ai_status("error", msg)
                 messagebox.showerror("Erro", msg)
-                self.log.err(f"{provider}: {msg}")
 
         def _validate_openai_key(self, key: str):
             return self._validate_openai_compatible(key, "OpenAI",
@@ -1136,7 +1193,6 @@ def run():
                         resp = json.loads(r.read())
                     return bool(resp.get("content"))
                 else:
-                    # OpenAI-compatible (OpenAI, DeepSeek, Groq, ...)
                     if provider in self.OPENAI_COMPATIBLE:
                         base_url = self.OPENAI_COMPATIBLE[provider][0].rstrip("/")
                         auth = f"Bearer {key}"
@@ -1166,6 +1222,10 @@ def run():
                     with urllib.request.urlopen(req, timeout=15) as r:
                         resp = json.loads(r.read())
                     return bool(resp.get("choices"))
+            except urllib.error.HTTPError as e:
+                if provider in ("NVIDIA",) and e.code == 401:
+                    self._bad_models.add(model_id)
+                return False
             except Exception:
                 return False
 
@@ -1267,17 +1327,20 @@ def run():
             if not key:
                 return None
 
-            # Se j\u00e1 foi selecionado antes e n\u00e3o est\u00e1 na blacklist,
-            # mant\u00e9m (a menos que force=True, ex: nova valida\u00e7\u00e3o)
             cached = self._auto_selected_models.get(provider)
             if cached and cached not in self._bad_models and not force:
                 return cached
 
+            self._update_ai_status("testing", f"Listando modelos de {provider}...")
             models = self._list_models_for_provider(provider, key)
             if not models:
+                self._update_ai_status("error", f"{provider}: 0 modelos disponíveis")
                 return None
 
-            # Filtra modelos n\u00e3o-chat e blacklist
+            self._update_ai_status(
+                "testing", f"{provider}: {len(models)} modelos disponíveis"
+            )
+
             skip_keywords = ["embedding", "tts", "whisper", "davinci",
                              "babbage", "curie", "ada", "moderation",
                              "similarity", "edit"]
@@ -1290,29 +1353,43 @@ def run():
             candidates = [m for m in models
                           if not any(s in m.lower() for s in skip_keywords)
                           and m not in self._bad_models]
-            # Ordena: prefer\u00eancia para candidatos com keywords de chat
             chat_first = [m for m in candidates
                           if any(k in m.lower() for k in chat_keywords)]
             other = [m for m in candidates if m not in chat_first]
             ordered = chat_first + other
 
-            for mid in ordered[:20]:  # testa no m\u00e1ximo 20 modelos
-                if self._test_chat_model(provider, key, mid):
+            tested = 0
+            import time as _time
+            for mid in ordered[:20]:
+                tested += 1
+                t0 = _time.time()
+                self._update_ai_status(
+                    "testing", f"Testando modelo [{tested}/{len(ordered[:20])}]: {mid}..."
+                )
+                ok = self._test_chat_model(provider, key, mid)
+                elapsed = (_time.time() - t0) * 1000
+                if ok:
                     self._auto_selected_models[provider] = mid
-                    # Atualiza config se for OpenAI-compatible
                     if provider in self.OPENAI_COMPATIBLE:
                         self.OPENAI_COMPATIBLE[provider] = (
                             self.OPENAI_COMPATIBLE[provider][0], mid
                         )
                     elif provider in self._custom_providers:
                         self._custom_providers[provider]["model"] = mid
+                    self._update_ai_status(
+                        "connected",
+                        f"{provider}/{mid} OK ({elapsed:.0f}ms)"
+                    )
                     return mid
+                self._update_ai_status(
+                    "testing",
+                    f"Modelo {mid} falhou ({elapsed:.0f}ms) — testando próximo..."
+                )
 
-            # NENHUM modelo passou no teste de chat
-            # N\u00e3o faz fallback cego — evita 401 em runtime
-            self.log.warn(
-                f"{provider}: nenhum modelo confirmou chat — "
-                "verifique se a chave tem permiss\u00e3o de infer\u00eancia"
+            self._update_ai_status(
+                "error",
+                f"{provider}: 0/{tested} modelos confirmaram chat — "
+                "chave sem permissão de inferência?"
             )
             return None
 
@@ -1326,6 +1403,9 @@ def run():
                     url = cfg[0].rstrip("/") + "/models"
             if not url:
                 return False, "URL n\u00e3o configurada"
+            import time as _time
+            _t0 = _time.time()
+            self._update_ai_status("testing", f"Handshake: {url}...")
             try:
                 req = urllib.request.Request(
                     url, headers={"Authorization": f"Bearer {key}"},
@@ -1333,12 +1413,31 @@ def run():
                 resp_status = 0
                 with urllib.request.urlopen(req, timeout=10) as r:
                     resp_status = r.status
+                _t1 = _time.time()
+                self._update_ai_status(
+                    "testing",
+                    f"Handshake OK (HTTP {resp_status}) | {(_t1-_t0)*1000:.0f}ms | Selecionando modelo..."
+                )
                 working = self._auto_select_model(provider, key, force=True)
                 if working:
                     return True, (f"OK \u2014 modelo: {working}")
                 return True, f"Conectado (HTTP {resp_status})"
+            except urllib.error.HTTPError as e:
+                _t1 = _time.time()
+                self._update_ai_status(
+                    "error",
+                    f"HTTP {e.code} ({(_t1-_t0)*1000:.0f}ms)"
+                )
+                if e.code == 401:
+                    return False, "Chave inv\u00e1lida"
+                return False, f"HTTP {e.code}: {e.reason[:100]}"
             except Exception as e:
+                _t1 = _time.time()
                 err = str(e)
+                self._update_ai_status(
+                    "error",
+                    f"Falha ({(_t1-_t0)*1000:.0f}ms): {err[:80]}"
+                )
                 if "401" in err:
                     return False, "Chave inv\u00e1lida"
                 return False, f"Erro: {err[:100]}"
