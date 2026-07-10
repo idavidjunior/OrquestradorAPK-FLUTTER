@@ -228,7 +228,139 @@ def test_orchestrator_cancel_after_start(tmp_path):
     orch.cancel()
     result = orch.orchestrate()
     assert result is False
-    # Build report should still be generated
-    report = tmp_path / "build_output" / "build_report.json"
-    # output_dir is relative, so it won't be under tmp_path
-    # Just verify it returned False quickly
+
+
+# ── New tests for robustness improvements ──────────────────────────────
+
+
+def test_is_dart_code_positive():
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    orch = FlutterBuildOrchestrator(project_path=".")
+    assert orch._is_dart_code("void main() {}") is True
+    assert orch._is_dart_code("import 'package:flutter/material.dart'; class App {}") is True
+    assert orch._is_dart_code("class MyWidget extends StatelessWidget { Widget build() { return Container(); } }") is True
+
+
+def test_is_dart_code_negative():
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    orch = FlutterBuildOrchestrator(project_path=".")
+    assert orch._is_dart_code("<?xml version='1.0'?>") is False
+    assert orch._is_dart_code("plugins {\n    id 'com.android.application'\n}") is False
+    assert orch._is_dart_code("buildscript { repositories { google() } }") is False
+    assert orch._is_dart_code("") is False
+    assert orch._is_dart_code("a") is False
+
+
+def test_is_dart_code_with_xml_rejection():
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    orch = FlutterBuildOrchestrator(project_path=".")
+    xml = '<?xml version="1.0" encoding="utf-8"?>\n<manifest package="com.test"></manifest>'
+    assert orch._is_dart_code(xml) is False
+
+
+def test_backup_file_creates_backup(mock_project):
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    orch = FlutterBuildOrchestrator(project_path=str(mock_project))
+    main_dart = mock_project / "lib" / "main.dart"
+    backup = orch._backup_file(main_dart)
+    assert backup is not None
+    assert backup.exists()
+    assert backup.name.startswith("main.dart.")
+    assert backup.name.endswith(".bak")
+    assert backup.read_text() == "void main() {}"
+
+
+def test_backup_file_returns_none_for_missing():
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    orch = FlutterBuildOrchestrator(project_path=".")
+    backup = orch._backup_file(Path("/nonexistent/file.dart"))
+    assert backup is None
+
+
+def test_write_dart_safe_valid(mock_project):
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    orch = FlutterBuildOrchestrator(project_path=str(mock_project))
+    main_dart = mock_project / "lib" / "main.dart"
+    result = orch._write_dart_safe(main_dart, "void main() { print('hello'); }")
+    assert result is True
+    assert main_dart.read_text().strip() == "void main() { print('hello'); }"
+
+
+def test_write_dart_safe_rejects_xml(mock_project):
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    orch = FlutterBuildOrchestrator(project_path=str(mock_project))
+    main_dart = mock_project / "lib" / "main.dart"
+    original = main_dart.read_text()
+    xml = '<?xml version="1.0"?><manifest></manifest>'
+    result = orch._write_dart_safe(main_dart, xml)
+    assert result is False, "Should reject non-Dart content"
+    assert main_dart.read_text() == original, "Should not modify file"
+
+
+def test_analyze_code_returns_false_on_errors(mock_project):
+    """analyze_code should return False when flutter analyze finds errors."""
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    import subprocess
+
+    original_run = subprocess.run
+
+    def mock_run_failure(*args, **kwargs):
+        class FakeResult:
+            returncode = 1
+            stdout = "error: some compilation error"
+            stderr = ""
+        return FakeResult()
+
+    subprocess.run = mock_run_failure
+    try:
+        orch = FlutterBuildOrchestrator(project_path=str(mock_project))
+        result = orch.analyze_code()
+        assert result is False, "Should return False when flutter analyze has errors"
+    finally:
+        subprocess.run = original_run
+
+
+def test_fallback_models_defined():
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    assert hasattr(FlutterBuildOrchestrator, "FALLBACK_MODELS")
+    assert len(FlutterBuildOrchestrator.FALLBACK_MODELS) > 0
+    assert "mistralai/ministral-14b-instruct-2512" in FlutterBuildOrchestrator.FALLBACK_MODELS
+
+
+def test_ministral_model_in_provider_config():
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    cfg = FlutterBuildOrchestrator.AI_PROVIDER_CONFIG
+    assert "Mistral Mini" in cfg
+    assert cfg["Mistral Mini"]["model"] == "mistralai/ministral-14b-instruct-2512"
+
+
+def test_apply_pre_build_fixes_returns_true(tmp_path):
+    """_apply_pre_build_fixes must always return True (non-blocking)."""
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "lib").mkdir()
+    (project / "lib" / "main.dart").write_text("void main() {}")
+    (project / "pubspec.yaml").write_text("name: test\n")
+    orch = FlutterBuildOrchestrator(project_path=str(project))
+    result = orch._apply_pre_build_fixes()
+    assert result is True
+
+
+def test_log_adapter_interface():
+    from flutter_orchestrator import FlutterBuildOrchestrator
+    calls = []
+    orch = FlutterBuildOrchestrator(
+        project_path=".", log_callback=lambda msg, lvl: calls.append((msg, lvl))
+    )
+    adapter = orch._LogAdapter(orch.log)
+    adapter.ok("test ok")
+    adapter.err("test err")
+    adapter.warn("test warn")
+    adapter.info("test info")
+    assert len(calls) == 4
+    assert calls[0][1] == "SUCCESS"
+    assert calls[1][1] == "ERROR"
+    assert calls[2][1] == "WARNING"
+    assert calls[3][1] == "INFO"
+

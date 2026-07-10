@@ -662,8 +662,72 @@ def run():
                 self.log.ok(f"local.properties gerado com flutter.sdk={flutter_sdk}")
 
         @staticmethod
+        def _get_template_versions() -> dict:
+            versions = {
+                "agp": "8.1.4",
+                "kotlin": "1.9.22",
+                "gradle": "8.12",
+                "compileSdk": "34",
+                "targetSdk": "34",
+                "minSdk": "21",
+            }
+            flutter_cmd = App._find_flutter_cmd()
+            if not flutter_cmd:
+                return versions
+            try:
+                temp_ref = Path(tempfile.mkdtemp(prefix="flutter_ref_"))
+                subprocess.run(
+                    [flutter_cmd, "create", "--project-name", "ref", "--platforms", "android", str(temp_ref / "ref")],
+                    capture_output=True, text=True, timeout=120,
+                )
+                ref_bg = temp_ref / "ref" / "android" / "app" / "build.gradle"
+                ref_bg2 = temp_ref / "ref" / "android" / "app" / "build.gradle.kts"
+                ref_props = temp_ref / "ref" / "android" / "gradle" / "wrapper" / "gradle-wrapper.properties"
+                if ref_bg2.exists():
+                    text = ref_bg2.read_text(encoding="utf-8")
+                    m = re.search(r'com\.android\.tools\.build:gradle:([\d.]+)', text)
+                    if m: versions["agp"] = m.group(1)
+                    m = re.search(r'compileSdk\s+(\d+)', text)
+                    if m: versions["compileSdk"] = m.group(1)
+                    m = re.search(r'minSdk\s+(\d+)', text)
+                    if m: versions["minSdk"] = m.group(1)
+                    m = re.search(r'targetSdk\s+(\d+)', text)
+                    if m: versions["targetSdk"] = m.group(1)
+                settings_gradle = temp_ref / "ref" / "android" / "settings.gradle"
+                if settings_gradle.exists():
+                    text = settings_gradle.read_text(encoding="utf-8")
+                    m = re.search(r'org\.jetbrains\.kotlin\.android[^v]*version\s+"([\d.]+)"', text)
+                    if m: versions["kotlin"] = m.group(1)
+                    m = re.search(r'com\.android\.application[^v]*version\s+"([\d.]+)"', text)
+                    if m: versions["agp"] = m.group(1)
+                if ref_props.exists():
+                    text = ref_props.read_text(encoding="utf-8")
+                    m = re.search(r'gradle-([\d.]+)-all\.zip', text)
+                    if m: versions["gradle"] = m.group(1)
+                shutil.rmtree(temp_ref, ignore_errors=True)
+            except Exception:
+                pass
+            return versions
+
+        @staticmethod
+        def _find_flutter_cmd() -> Optional[str]:
+            for candidate in [
+                "C:\\tools\\flutter\\bin\\flutter.bat", "C:\\flutter\\bin\\flutter.bat",
+                str(Path.home() / "flutter" / "bin" / "flutter.bat"),
+                str(Path.home() / ".flutter_auto" / "flutter" / "bin" / "flutter.bat"),
+            ]:
+                if Path(candidate).exists():
+                    return candidate
+            try:
+                subprocess.run(["flutter", "--version"], capture_output=True, timeout=10)
+                return "flutter"
+            except Exception:
+                return None
+
+        @staticmethod
         def _write_minimal_project(project_dir: Path):
             """Gera estrutura Flutter completa para build Android."""
+            versions = App._get_template_versions()
             dirs = [
                 "lib",
                 "test",
@@ -762,11 +826,11 @@ def run():
                 "}\n"
                 "android {\n"
                 "    namespace 'com.temp.app'\n"
-                "    compileSdk 34\n"
+                f"    compileSdk {versions['compileSdk']}\n"
                 "    defaultConfig {\n"
                 "        applicationId 'com.temp.app'\n"
-                "        minSdk 21\n"
-                "        targetSdk 34\n"
+                f"        minSdk {versions['minSdk']}\n"
+                f"        targetSdk {versions['targetSdk']}\n"
                 "        versionCode 1\n"
                 "        versionName '1.0.0'\n"
                 "    }\n"
@@ -783,13 +847,13 @@ def run():
             # ── Project-level build.gradle ───────────────────────────
             (project_dir / "android" / "build.gradle").write_text(
                 "buildscript {\n"
-                "    ext.kotlin_version = '1.9.22'\n"
+                f"    ext.kotlin_version = '{versions['kotlin']}'\n"
                 "    repositories {\n"
                 "        google()\n"
                 "        mavenCentral()\n"
                 "    }\n"
                 "    dependencies {\n"
-                '        classpath "com.android.tools.build:gradle:8.1.4"\n'
+                f'        classpath "com.android.tools.build:gradle:{versions["agp"]}"\n'
                 "        classpath \"org.jetbrains.kotlin:kotlin-gradle-plugin:"
                 "$kotlin_version\"\n"
                 "    }\n"
@@ -835,8 +899,8 @@ def run():
                 "}\n"
                 "plugins {\n"
                 '    id "dev.flutter.flutter-plugin-loader" version "1.0.0"\n'
-                '    id "com.android.application" version "8.1.4" apply false\n'
-                '    id "org.jetbrains.kotlin.android" version "1.9.22" apply false\n'
+                f'    id "com.android.application" version "{versions["agp"]}" apply false\n'
+                f'    id "org.jetbrains.kotlin.android" version "{versions["kotlin"]}" apply false\n'
                 "}\n"
                 'include ":app"\n',
                 encoding="utf-8",
@@ -858,7 +922,7 @@ def run():
                 "zipStoreBase=GRADLE_USER_HOME\n"
                 "zipStorePath=wrapper/dists\n"
                 "distributionUrl=https\\://services.gradle.org/"
-                "distributions/gradle-8.12-all.zip\n",
+                f"distributions/gradle-{versions['gradle']}-all.zip\n",
                 encoding="utf-8",
             )
 

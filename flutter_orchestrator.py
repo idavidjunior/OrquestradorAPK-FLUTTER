@@ -14,6 +14,7 @@ import argparse
 import json
 import platform
 import re
+import tempfile
 import zipfile
 import tarfile
 import winsound
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
+from urllib.parse import urlparse
 
 
 try:
@@ -142,7 +144,20 @@ class FlutterBuildOrchestrator:
                       "model": "jamba-1.5-mini"},
         "OpenRouter":{"type": "openai",    "url": "https://openrouter.ai/api/v1",
                       "model": "openai/gpt-4o-mini"},
+        "Mistral Mini": {"type": "openai", "url": "https://api.mistral.ai/v1",
+                         "model": "mistralai/ministral-14b-instruct-2512"},
     }
+
+    FALLBACK_MODELS = [
+        "mistralai/ministral-14b-instruct-2512",
+        "mistral-large-latest",
+        "openai/gpt-4o-mini",
+        "gemini-2.0-flash",
+        "claude-3-haiku-20240307",
+        "llama-3.3-70b-versatile",
+        "command-r-plus",
+        "deepseek-chat",
+    ]
 
     COMMON_FLUTTER_PATHS = [
         "C:\\tools\\flutter",
@@ -544,14 +559,15 @@ class FlutterBuildOrchestrator:
                 [self.flutter_cmd, "analyze"],
                 cwd=self.project_path, capture_output=True, text=True, timeout=300
             )
-            if result.returncode == 0:
+            output = (result.stdout + result.stderr).lower()
+            if result.returncode == 0 and "error:" not in output:
                 self.log("An\u00e1lise sem erros", "SUCCESS")
-            else:
-                if "error:" in (result.stdout + result.stderr).lower():
-                    self.log("Erros de an\u00e1lise encontrados", "WARNING")
-                    self.log(result.stdout[:500], "INFO")
-                else:
-                    self.log("Apenas warnings (continuando...)", "WARNING")
+                return True
+            if "error:" in output:
+                self.log("Erros de an\u00e1lise encontrados", "ERROR")
+                self.log(result.stdout[:500], "INFO")
+                return False
+            self.log("Apenas warnings (continuando...)", "WARNING")
             return True
         except Exception as e:
             self.log(f"Erro: {e}", "ERROR")
@@ -648,7 +664,8 @@ class FlutterBuildOrchestrator:
                 root_uri = pkg.get("rootUri", "")
                 if not root_uri.startswith("file://"):
                     continue
-                pkg_path = Path(root_uri.replace("file://", "").replace("/", os.sep))
+                parsed = urlparse(root_uri)
+                pkg_path = Path(parsed.path)
                 bg_path = pkg_path / "android" / "build.gradle"
                 if not bg_path.exists():
                     continue
@@ -689,7 +706,16 @@ class FlutterBuildOrchestrator:
         code = main_dart.read_text(encoding="utf-8")
         fixed = self._ai_fix_code("Pre-build AI scan: analyze for potential compilation issues", code, {})
         if fixed and fixed != code:
+            if not self._is_dart_code(fixed):
+                self.log("IA retornou conteudo nao-Dart no pre-build scan (ignorado)", "WARNING")
+                return True
+            backup = self._backup_file(main_dart)
+            if backup:
+                self.log(f"Backup pre-build: {backup.name}", "INFO")
             main_dart.write_text(fixed, encoding="utf-8")
+            valid = self._validate_dart_syntax(fixed)
+            if not valid:
+                self.log("Sintaxe Dart nao confirmada apos scan IA (prosseguindo)", "WARNING")
             self.log("IA corrigiu codigo preventivamente antes do build", "SUCCESS")
             if self.kb_path:
                 self._learn_from_success("pre-build AI scan", fixed[:500])
@@ -938,22 +964,27 @@ class FlutterBuildOrchestrator:
 
             if file_fixes:
                 self.log(f"IA corrigiu {len(file_fixes)} arquivo(s)", "SUCCESS")
-                # Apply all fixes
                 main_fix = None
+                main_path = None
                 for rel_path, content in file_fixes.items():
                     abs_path = self.project_path / rel_path
                     if abs_path.exists():
                         abs_path.write_text(content.strip() + "\n", encoding="utf-8")
                         self.log(f"Corrigido: {rel_path}", "SUCCESS")
-                    if rel_path == "lib/main.dart" or rel_path == "main.dart":
+                    elif not abs_path.parent.exists():
+                        abs_path.parent.mkdir(parents=True, exist_ok=True)
+                        abs_path.write_text(content.strip() + "\n", encoding="utf-8")
+                        self.log(f"Criado: {rel_path}", "SUCCESS")
+                    else:
+                        self.log(f"Arquivo nao encontrado (ignorado): {rel_path}", "WARNING")
+                    if rel_path in ("lib/main.dart", "main.dart"):
                         main_fix = content
+                        main_path = rel_path
                 if main_fix:
-                    return main_fix
-                # If main.dart wasn't in the fixes, try single-file fallback
-                single = list(file_fixes.values())[0]
-                if len(single) > 50:
-                    return single
-                self.log("IA retornou conte\u00fado muito curto", "WARNING")
+                    if self._is_dart_code(main_fix):
+                        return main_fix
+                    self.log(f"IA retornou conteudo nao-Dart para main.dart (ignorado)", "WARNING")
+                self.log("Nao foi possivel extrair correcao valida para main.dart", "WARNING")
                 return None
 
             # Fallback: single Dart code block
@@ -1033,6 +1064,49 @@ class FlutterBuildOrchestrator:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         self.log(f"Arquivo atualizado: {path.relative_to(self.project_path)}", "INFO")
+        return True
+
+    def _is_dart_code(self, text: str) -> bool:
+        if not text or len(text) < 10:
+            return False
+        no_dart = re.search(r'(<\?xml|android:).*|^plugins\s*\{|^buildscript\s*\{', text, re.IGNORECASE | re.DOTALL)
+        if no_dart:
+            return False
+        has_dart = bool(re.search(r'\b(import\s+|class\s+\w+|void\s+main|Widget\s+build|@override|final\s+\w+)', text))
+        return has_dart or ('void main' in text)
+
+    def _validate_dart_syntax(self, code: str) -> bool:
+        try:
+            r = subprocess.run(
+                [self.flutter_cmd, "format", "--set-exit-if-changed", "-o", "show"],
+                input=code, capture_output=True, text=True, timeout=15,
+            )
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    def _backup_file(self, path: Path) -> Optional[Path]:
+        if not path.exists():
+            return None
+        backup_dir = self.project_path / ".orchestrator_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup = backup_dir / f"{path.name}.{ts}.bak"
+        shutil.copy2(str(path), str(backup))
+        return backup
+
+    def _write_dart_safe(self, path: Path, content: str) -> bool:
+        if not self._is_dart_code(content):
+            self.log(f"Recusado: conteudo nao parece Dart valido -> {path.name}", "ERROR")
+            return False
+        backup = self._backup_file(path)
+        if backup:
+            self.log(f"Backup: {backup.name}", "INFO")
+        path.write_text(content.strip() + "\n", encoding="utf-8")
+        if self._validate_dart_syntax(content):
+            self.log(f"Escrito + valido: {path.name}", "SUCCESS")
+            return True
+        self.log(f"AVISO: {path.name} escrito mas sintaxe Dart nao confirmada", "WARNING")
         return True
 
     def _apply_ai_fixes(self, errors: str, fixes: dict) -> bool:
@@ -1136,30 +1210,81 @@ class FlutterBuildOrchestrator:
         code = main_dart.read_text(encoding="utf-8")
         self._fallback_attempt = 0
         self._consecutive_401 = 0
-        fixed = self._ai_fix_code(errors, code, files)
-        if not fixed:
-            return False
 
-        main_dart.write_text(fixed, encoding="utf-8")
-        self._fix_cache[cache_key] = {}
-        self._last_errors = errors[:500]
-        self._last_fix_applied = True
+        accumulated_errors = errors
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            if attempt > 1 and self._cancelled:
+                self.log("Corre\u00e7\u00e3o cancelada pelo usu\u00e1rio", "WARNING")
+                return False
+            if attempt > 1:
+                self.log(f"Tentativa {attempt}/{max_retries}...", "INFO")
+                code = main_dart.read_text(encoding="utf-8")
+                files["main.dart"] = code
 
-        ok = self._retry_build(release, build_number)
-        if ok:
-            self._learn_from_success(errors[:500], fixed[:500])
-        return ok
+            fixed = self._ai_fix_code(accumulated_errors, code, files)
+            if not fixed:
+                if attempt < max_retries:
+                    accumulated_errors += "\n[IA nao retornou correcao]"
+                    continue
+                return False
+
+            if not self._is_dart_code(fixed):
+                self.log(f"IA retornou conteudo nao-Dart na tentativa {attempt}", "WARNING")
+                if attempt < max_retries:
+                    accumulated_errors += "\n[IA retornou conteudo nao-Dart]"
+                    continue
+                return False
+
+            backup = self._backup_file(main_dart)
+            if backup and attempt == 1:
+                self.log(f"Backup do main.dart: {backup.name}", "INFO")
+
+            main_dart.write_text(fixed.strip() + "\n", encoding="utf-8")
+            self._fix_cache[cache_key] = {}
+            self._last_errors = accumulated_errors[:500]
+            self._last_fix_applied = True
+
+            ok = self._retry_build(release, build_number)
+            if ok:
+                if self.kb_path:
+                    self._learn_from_success(accumulated_errors[:500], fixed[:500])
+                return True
+
+            err_text = self._capture_last_build_error()
+            if err_text:
+                accumulated_errors += "\n" + err_text
+
+        self.log(f"Corre\u00e7\u00e3o falhou ap\u00f3s {max_retries} tentativas", "ERROR")
+        return False
+
+    def _capture_last_build_error(self) -> Optional[str]:
+        try:
+            build_dir = self.project_path / "build"
+            if not build_dir.exists():
+                return None
+            logs = list(build_dir.rglob("*.log"))
+            if not logs:
+                return None
+            latest = max(logs, key=lambda p: p.stat().st_mtime)
+            text = latest.read_text(errors="ignore")
+            lines = [l for l in text.split("\n") if "error" in l.lower()]
+            return "\n".join(lines[-20:])[:2000] if lines else text[-2000:]
+        except Exception:
+            return None
 
     def _retry_build(self, release: bool,
                      build_number: Optional[str]) -> bool:
         """Reexecuta flutter pub get + flutter build apk."""
         try:
-            subprocess.run(
+            r = subprocess.run(
                 [self.flutter_cmd, "pub", "get"],
                 cwd=self.project_path, capture_output=True, text=True, timeout=120,
             )
-        except Exception:
-            pass
+            if r.returncode != 0:
+                self.log(f"pub get no retry falhou: {r.stderr[:200]}", "WARNING")
+        except Exception as e:
+            self.log(f"pub get no retry: {e}", "WARNING")
         cmd = [self.flutter_cmd, "build", "apk"]
         if release:
             cmd.append("--release")
