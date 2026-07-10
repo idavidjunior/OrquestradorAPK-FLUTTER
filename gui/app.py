@@ -383,7 +383,7 @@ def run():
             # ── Right panel (progresso + reestruturação + log) ──────────
             right = ctk.CTkFrame(self)
             right.grid(row=1, column=1, sticky="nsew", padx=(2, 5), pady=5)
-            right.grid_rowconfigure(3, weight=1)
+            right.grid_rowconfigure(5, weight=1)
             right.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(
@@ -400,7 +400,7 @@ def run():
                 right, text="", font=ctk.CTkFont(size=11),
             )
             self.lbl_progress_status.grid(
-                row=1, column=0, padx=10, pady=(18, 0), sticky="w"
+                row=2, column=0, padx=10, pady=(0, 0), sticky="w"
             )
 
             # -- Reestruturação ao vivo --
@@ -409,17 +409,20 @@ def run():
                 text_color="#90CAF9",
             )
             self.lbl_restructuring.grid(
-                row=2, column=0, padx=10, pady=(2, 0), sticky="w"
+                row=3, column=0, padx=10, pady=(0, 0), sticky="w"
             )
 
             # -- Log --
             ctk.CTkLabel(
                 right, text="Log de Build",
                 font=ctk.CTkFont(size=14, weight="bold"),
-            ).grid(row=3, column=0, pady=(5, 2))
+            ).grid(row=4, column=0, pady=(5, 2))
 
-            self.log_text = ctk.CTkTextbox(right, state="disabled", wrap="word")
-            self.log_text.grid(row=4, column=0, sticky="nsew", padx=5, pady=5)
+            self.log_text = ctk.CTkTextbox(
+                right, state="disabled", wrap="word",
+                font=ctk.CTkFont(size=12, family="Consolas"),
+            )
+            self.log_text.grid(row=5, column=0, sticky="nsew", padx=5, pady=5)
 
             self.log = Logger(self.log_text)
             self.kb = KnowledgeBase(self.log)
