@@ -21,8 +21,8 @@ class IAResponseValidator:
             (r'^(class\s+.*?)(?=\n\s*\n|$)', re.DOTALL | re.MULTILINE),
         ]
         self.non_code_indicators = [
-            r'^(aqui est[aá]|aqui|o c[oó]digo|explica[cç][aã]o|vou|precisamos|recomendo|aqui está o código corrigido)',
-            r'^[A-Z][a-z]+:',  # "Solução:", "Resposta:"
+            r'^(aqui est[aá]|aqui|o c[oó]digo|explica[cç][aã]o|vou|precisamos|recomendo|aqui est[áa] o c[óo]digo corrigido)',
+            r'^[A-Z][a-z]+:',
             r'^[0-9]+\.',
         ]
 
@@ -56,6 +56,27 @@ class IAResponseValidator:
             if 'void main()' not in extracted_code and 'runApp' not in extracted_code:
                 errors.append("Código não parece ser um main.dart válido (falta void main ou runApp)")
         return True, extracted_code, errors
+
+    def force_code_extraction(self, response: str) -> Optional[str]:
+        if not response or len(response.strip()) < 50:
+            return None
+        code_match = re.search(r'```(?:dart)?\s*\n(.*?)\n```', response, re.DOTALL)
+        if code_match:
+            extracted = code_match.group(1).strip()
+            if self._looks_like_dart(extracted):
+                return extracted
+        if 'import' in response and ('class' in response or 'void main' in response):
+            lines = [l.rstrip() for l in response.split('\n') if l.strip()]
+            dart_block = []
+            in_block = False
+            for line in lines:
+                if line.startswith('import ') or line.startswith('class ') or line.startswith('void '):
+                    in_block = True
+                if in_block:
+                    dart_block.append(line)
+            if dart_block and self._looks_like_dart('\n'.join(dart_block)):
+                return '\n'.join(dart_block)
+        return None
 
     def _clean_response(self, response: str) -> str:
         cleaned = re.sub(r'^#+\s+.*?\n', '', response, flags=re.MULTILINE)

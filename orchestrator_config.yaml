@@ -1,10 +1,8 @@
-# Configuracao principal do orquestrador
-
-version: "2.0"
+version: "2.1"
 
 build:
   max_retries: 3
-  build_timeout: 600  # segundos
+  build_timeout: 600
   kotlin_version: "1.9.22"
   gradle_version: "7.4.2"
   compile_sdk: 34
@@ -14,17 +12,30 @@ ia:
   fallback_models:
     - "abacusai/dracarys-llama-3.1-70b-instruct"
     - "meta/llama-3.1-8b-instruct"
-  max_response_time: 90  # segundos
+  max_response_time: 60
+  min_response_length: 100
+  prompt:
+    force_code_block: true
+    include_full_error: true
+    include_code_context: true
+    max_code_lines: 500
 
 timeout:
   min_timeout: 30
-  max_timeout: 300
+  max_timeout: 120
   adaptive_enabled: true
+  learning_rate: 0.8
 
 knowledge_base:
   auto_learn: true
-  max_solutions_per_error: 5
-  min_confidence: 0.6
+  min_confidence: 0.5
+  prefer_local_fixes: true
+
+local_fixes:
+  enabled: true
+  kotlin_fixer: true
+  dependency_fixer: true
+  import_fixer: true
 
 monitoring:
   adb_polling_pause: true
