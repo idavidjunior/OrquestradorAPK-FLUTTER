@@ -131,7 +131,7 @@ def run():
             self._build_ui()
             self._load_state()
             self._start_adb_poll()
-            self.after(5000, self._schedule_ai_health_check)
+            self.after(100, self._auto_validate_on_startup)
             self.log.ok("GUI pronta \u2014 selecione/cole um projeto para come\u00e7ar")
 
         # ==================================================================
@@ -299,17 +299,11 @@ def run():
             api_btn_row.grid_columnconfigure(0, weight=1)
             api_btn_row.grid_columnconfigure(1, weight=1)
 
-            self.btn_validate_api = ctk.CTkButton(
-                api_btn_row, text="Validar Chave",
-                command=self._validate_api_key,
-            )
-            self.btn_validate_api.grid(row=0, column=0, padx=(0, 2), sticky="ew")
-
             self.btn_save_api = ctk.CTkButton(
-                api_btn_row, text="Salvar", fg_color="#555",
+                api_btn_row, text="Salvar Chave", fg_color="#555",
                 command=self._save_api_key,
             )
-            self.btn_save_api.grid(row=0, column=1, padx=(2, 0), sticky="ew")
+            self.btn_save_api.grid(row=0, column=0, columnspan=2, sticky="ew")
 
             # -- A\u00e7\u00f5es --
             ctk.CTkLabel(
@@ -342,8 +336,9 @@ def run():
             self.check_skip_tests = ctk.CTkCheckBox(btn_frame, text="Pular Testes")
             self.check_skip_tests.pack(fill="x", pady=2)
             self.check_auto_install = ctk.CTkCheckBox(
-                btn_frame, text="Auto-instalar Flutter",
+                btn_frame, text="Auto-instalar Flutter", onvalue=True, offvalue=False,
             )
+            self.check_auto_install.select()
             self.check_auto_install.pack(fill="x", pady=2)
 
             # -- Utilit\u00e1rios --
@@ -488,6 +483,7 @@ def run():
                 self.project_dir = Path(pasta).resolve()
                 self._save_state()
                 self.log.ok(f"Projeto selecionado: {self.project_dir}")
+                self.after(500, self._start_build)
 
         def _clone_github(self):
             url = tk.simpledialog.askstring(
@@ -510,6 +506,7 @@ def run():
                 if r.returncode == 0:
                     self.project_dir = dest
                     self.log.ok(f"Clonado: {dest}")
+                    self.after(500, self._start_build)
                 else:
                     self.log.err(f"Falha: {r.stderr}")
             except Exception as e:
@@ -635,7 +632,8 @@ def run():
                 self._save_state()
                 _rui("OK: Projeto preparado com sucesso!")
                 self.log.ok(f"Projeto preparado em: {project_dir}")
-                self.log.info("Voce ja pode iniciar o build!")
+                self.log.info("Iniciando build automaticamente...")
+                self.after(500, self._start_build)
             except Exception as e:
                 self.log.err(f"Erro ao processar codigo: {e}")
             finally:
@@ -964,6 +962,12 @@ def run():
             }
             color = colors.get(status, "#888888")
             self.lbl_ai_live_status.configure(text_color=color)
+            if status == "connected":
+                self.api_provider_menu.configure(fg_color="#1B5E20")
+            elif status == "error":
+                self.api_provider_menu.configure(fg_color="#BF360C")
+            else:
+                self.api_provider_menu.configure(fg_color=("gray75", "gray25"))
             if detail:
                 tag = labels.get(status, status)
                 self.log.info(f"[IA ◉ {tag}] {detail}")
@@ -987,6 +991,33 @@ def run():
                 detail = "Health-check " + ("OK" if ok else "FALHOU") + f" | {provider}/{model} | {elapsed:.0f}ms"
                 self._update_ai_status("connected" if ok else "error", detail)
                 self._health_prev_ok = ok
+            self.after(60000, self._schedule_ai_health_check)
+
+        def _auto_validate_on_startup(self):
+            if not self.api_key:
+                self.after(5000, self._schedule_ai_health_check)
+                return
+            self._update_ai_status("testing", "Validando chave salva...")
+            threading.Thread(target=self._do_startup_validation, daemon=True).start()
+
+        def _do_startup_validation(self):
+            provider = self.api_provider
+            self._update_ai_status("testing", f"Auto-validando {provider}...")
+            working = self._auto_select_model(provider, self.api_key, force=True)
+            if working:
+                kb_fixes = self.kb._db.get("fixes", [])
+                self._update_ai_status(
+                    "connected",
+                    f"{provider}/{working} OK — KB: {len(kb_fixes)} correções"
+                )
+                self.after(0, lambda: self.log.ok(
+                    "Conexão IA+KB estabelecida automaticamente"
+                ))
+            else:
+                self._update_ai_status(
+                    "error",
+                    f"{provider}: nenhum modelo funcional encontrado"
+                )
             self.after(60000, self._schedule_ai_health_check)
 
         def _add_custom_provider(self):
@@ -1170,59 +1201,6 @@ def run():
             import webbrowser
             webbrowser.open(url)
             self.log.info(f"Link aberto: {url}")
-
-        def _validate_api_key(self):
-            key = self.api_key_entry.get().strip()
-            if not key:
-                messagebox.showwarning("Aviso", "Digite uma chave primeiro")
-                return
-            self.api_key = key
-
-            provider = self.api_provider
-            self._update_ai_status("testing", f"Validando chave {provider}...")
-
-            if provider == "Gemini":
-                from gui.gemini_fixer import GeminiCodeFixer
-                ok, msg = GeminiCodeFixer.validate_key(key)
-                if ok:
-                    working = self._auto_select_model("Gemini", key, force=True)
-                    if working:
-                        msg = f"OK \u2014 modelo: {working}"
-            elif provider == "OpenAI":
-                ok, msg = self._validate_openai_key(key)
-            elif provider == "Anthropic":
-                ok, msg = self._validate_anthropic_key(key)
-            elif provider == "OpenRouter":
-                ok, msg = self._validate_openrouter_key(key)
-            elif provider == "Ollama (local)":
-                ok, msg = self._validate_ollama()
-            elif provider in self.OPENAI_COMPATIBLE:
-                url = self.OPENAI_COMPATIBLE[provider][0].rstrip("/") + "/models"
-                ok, msg = self._validate_openai_compatible(key, provider, url)
-            elif provider in self._custom_providers:
-                ok, msg = self._validate_custom_provider(key)
-            else:
-                ok, msg = False, "Provedor desconhecido"
-
-            if ok:
-                self.lbl_api_status.configure(
-                    text=f"\u2713 {msg}", text_color="#4CAF50"
-                )
-                self._update_ai_status("connected", msg)
-                self.btn_get_key.grid_remove()
-                messagebox.showinfo("Sucesso", msg)
-            else:
-                self.lbl_api_status.configure(
-                    text=f"\u2717 {msg}", text_color="#FF5722"
-                )
-                self._update_ai_status("error", msg)
-                self.btn_get_key.grid()
-                if messagebox.askyesno(
-                    "Chave inv\u00e1lida",
-                    f"A chave n\u00e3o funciona com {self.api_provider}.\n\n"
-                    "Deseja abrir o navegador para obter uma nova chave?"
-                ):
-                    self._open_provider_key_url()
 
         def _validate_openai_key(self, key: str):
             return self._validate_openai_compatible(key, "OpenAI",
@@ -1769,7 +1747,6 @@ def run():
             self.btn_github.configure(state=est)
             self.btn_analyze.configure(state=est)
             self.btn_open_output.configure(state=est)
-            self.btn_validate_api.configure(state=est)
             self.btn_save_api.configure(state=est)
             self.btn_select_adb.configure(state=est)
             self.btn_stop.configure(state="normal" if running else "disabled")
