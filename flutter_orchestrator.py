@@ -628,6 +628,15 @@ class FlutterBuildOrchestrator:
                 cmd.extend(["--build-number", build_number])
             if _skip_gradle_check:
                 cmd.append("--android-skip-build-dependency-validation")
+            # Pre-build hook: remove .kts antes da compilacao nativa (evita erro KGP)
+            try:
+                from consolidate_build_pipeline import BuildFixer
+                pre_fixer = BuildFixer(str(self.project_path))
+                pre_fixer.remove_kts_before_build()
+                if pre_fixer.fixes_applied:
+                    self.log(f"[PRE-BUILD] {', '.join(pre_fixer.fixes_applied)}", "INFO")
+            except Exception as pre_e:
+                self.log(f"[PRE-BUILD] {pre_e}", "DEBUG")
             result = subprocess.run(
                 cmd, cwd=self.project_path,
                 capture_output=True, text=True, timeout=1800

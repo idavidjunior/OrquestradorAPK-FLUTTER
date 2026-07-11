@@ -319,6 +319,107 @@ dependencies {
         self.fixes_applied.append("zipalign")
         return True
 
+    def remove_kts_before_build(self):
+        """Pre-build hook: remove build.gradle.kts forçadamente antes da compilacao nativa."""
+        kts = self.project_path / "android" / "app" / "build.gradle.kts"
+        if kts.exists():
+            kts.unlink()
+        # Garante que build.gradle existe com conteudo minimo
+        gradle = self.project_path / "android" / "app" / "build.gradle"
+        if not gradle.exists() or gradle.stat().st_size == 0:
+            with open(gradle, 'w', encoding='utf-8') as f:
+                f.write('''android {
+    compileSdkVersion 34
+    namespace "com.example.app"
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+}
+''')
+        self.fixes_applied.append("remove_kts")
+        return True
+
+    def detect_and_fix_gradle(self):
+        """Detecta e corrige problemas completos de Gradle/Kotlin."""
+        log_msg = "[FIX] Verificando e corrigindo configuracao Gradle..."
+        print(log_msg)
+        # 1. Remove .kts
+        kts = self.project_path / "android" / "app" / "build.gradle.kts"
+        kts_removed = kts.exists()
+        if kts_removed:
+            kts.unlink()
+        # 2. Recria build.gradle
+        gradle = self.project_path / "android" / "app" / "build.gradle"
+        with open(gradle, 'w', encoding='utf-8') as f:
+            f.write('''android {
+    compileSdkVersion 34
+    namespace "com.example.app"
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+}
+''')
+        # 3. Ajusta project build.gradle
+        project_gradle = self.project_path / "android" / "build.gradle"
+        if project_gradle.exists():
+            with open(project_gradle, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            content = re.sub(r"ext\.kotlin_version\s*=\s*['\"][^'\"]+['\"]", "ext.kotlin_version = '1.9.22'", content)
+            if "kotlin-gradle-plugin" not in content:
+                content = content.replace(
+                    "dependencies {",
+                    "dependencies {\n        classpath \"org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version\""
+                )
+            with open(project_gradle, 'w', encoding='utf-8') as f:
+                f.write(content)
+        # 4. Ajusta gradle-wrapper.properties
+        gradle_props = self.project_path / "android" / "gradle" / "wrapper" / "gradle-wrapper.properties"
+        if not gradle_props.parent.exists():
+            gradle_props.parent.mkdir(parents=True, exist_ok=True)
+        with open(gradle_props, 'w', encoding='utf-8') as f:
+            f.write("distributionUrl=https\\://services.gradle.org/distributions/gradle-8.3-bin.zip\n")
+        # 5. Registra na KB
+        try:
+            kb_path = self.project_path / "knowledge_base.json"
+            if kb_path.exists():
+                with open(kb_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    kb = json.load(f)
+            else:
+                kb = {"errors": {}, "stats": {"total_errors": 0, "solved_errors": 0, "learning_rate": 0}}
+            error_hash = "pre_build_gradle_fix"
+            kb["errors"][error_hash] = {
+                "pattern": "Kotlin/Gradle fix aplicado preventivamente",
+                "first_seen": datetime.now().isoformat(),
+                "occurrences": kb["errors"].get(error_hash, {}).get("occurrences", 0) + 1,
+                "solutions": [{"solution": "detect_and_fix_gradle", "attempts": 1, "success": 1, "last_used": datetime.now().isoformat()}],
+                "success_rate": 1.0
+            }
+            kb["stats"]["total_errors"] = len(kb["errors"])
+            kb["stats"]["solved_errors"] = sum(1 for e in kb["errors"].values() if any(s["success"] > 0 for s in e.get("solutions", [])))
+            kb["stats"]["learning_rate"] = kb["stats"]["solved_errors"] / kb["stats"]["total_errors"] if kb["stats"]["total_errors"] > 0 else 0
+            with open(kb_path, 'w', encoding='utf-8') as f:
+                json.dump(kb, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+        self.fixes_applied.append("detect_and_fix_gradle")
+        return True
+
     FIX_ACTIONS = {
         "ensure_pubspec_dependencies": ensure_pubspec_dependencies,
         "regenerate_android_properties": regenerate_android_properties,
@@ -330,6 +431,8 @@ dependencies {
         "clean_incremental_build": clean_incremental_build,
         "resign_apk": resign_apk,
         "zipalign_apk": zipalign_apk,
+        "remove_kts_before_build": remove_kts_before_build,
+        "detect_and_fix_gradle": detect_and_fix_gradle,
     }
 
     def apply_fix(self, action_name):

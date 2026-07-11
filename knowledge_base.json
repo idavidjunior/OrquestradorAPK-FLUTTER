@@ -17,13 +17,13 @@
     "cfc5f5bdf8afadfe2523f97f4acedfdb": {
       "pattern": "WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): on_audio_query_android\nFuture versions of Flutter will fail to build if your app uses plugins that apply KGP.\n\nPlease check the changelogs of these plugins and upgrade to a version that supports Built-in Kotlin.\nIf no such version exists, report the issue to the plugin. If necessary, here is a guide on filing \nan issue against a plugin: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/",
       "first_seen": "2026-07-11T19:13:57.397092",
-      "occurrences": 2,
+      "occurrences": 3,
       "solutions": [
         {
           "solution": "KotlinGradleFixer: remove .kts + recria build.gradle",
-          "attempts": 2,
-          "success": 2,
-          "last_used": "2026-07-11T19:19:45.455457"
+          "attempts": 3,
+          "success": 3,
+          "last_used": "2026-07-11T19:52:20.834766"
         }
       ],
       "success_rate": 0
@@ -33,18 +33,18 @@
     "member": {
       "context": "WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): on_audio_query_android\nFuture versions of Flutter will fail to build if your app uses plugins that apply KGP.\n\nPlease check the changelogs of these plugins and upgrade to a version that supports Built-in Kotlin.\nIf no such version exists, report the issue to the plugin. If necessary, here is a guide on filing \nan issue against a plugin: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/",
       "first_seen": "2026-07-11T19:13:57.410018",
-      "occurrences": 2
+      "occurrences": 3
     },
     "versions": {
       "context": "WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): on_audio_query_android\nFuture versions of Flutter will fail to build if your app uses plugins that apply KGP.\n\nPlease check the changelogs of these plugins and upgrade to a version that supports Built-in Kotlin.\nIf no such version exists, report the issue to the plugin. If necessary, here is a guide on filing \nan issue against a plugin: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/",
       "first_seen": "2026-07-11T19:13:57.410018",
-      "occurrences": 2
+      "occurrences": 3
     }
   },
   "solutions": {},
   "stats": {
-    "total_errors": 3,
-    "solved_errors": 3,
+    "total_errors": 4,
+    "solved_errors": 4,
     "learning_rate": 1.0
   },
   "learned_patterns": []

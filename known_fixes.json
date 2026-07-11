@@ -1637,6 +1637,18 @@
       "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
       "times_applied": 0,
       "source": "failed_attempt"
+    },
+    {
+      "id": "failed_342d7823",
+      "description": "Falha não resolvida: \nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Loc...",
+      "error_patterns": [
+        "\nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Local\\Temp\\flutter_build_16mkwia3\\app\\android\\app\\build.gradle.kts' line: 1\n\n* What went wrong:\nAn exce"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
     }
   ],
   "package_versions": {
