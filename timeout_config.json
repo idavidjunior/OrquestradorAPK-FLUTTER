@@ -91,7 +91,21 @@
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T12:14:00.093578",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T12:14:00.130958",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
     }
   ],
-  "last_update": "2026-07-11T11:44:43.032149"
+  "last_update": "2026-07-11T12:14:00.134645"
 }

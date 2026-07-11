@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -1265,7 +1266,7 @@ def run():
                     else:
                         msg += " (sem modelo de chat — tente outra chave)"
                 self.lbl_api_status.configure(
-                    text=f"✓ {msg}", text_color="#4CAF50"
+                    text=f"[OK] {msg}", text_color="#4CAF50"
                 )
                 self._update_ai_status("connected", f"{self.api_provider}: {msg}")
             else:
@@ -1284,7 +1285,7 @@ def run():
                     msg = f"Chave n\u00e3o funciona com nenhum provedor"
                     self._update_ai_status("error", msg)
                 self.lbl_api_status.configure(
-                    text=f"{'✓' if ok else '✗'} {msg}",
+                    text=f"{'[OK]' if ok else '✗'} {msg}",
                     text_color="#4CAF50" if ok else "#FF5722",
                 )
 

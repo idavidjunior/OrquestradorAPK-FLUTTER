@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import asyncio
 import subprocess
 import time
@@ -372,10 +373,19 @@ class MyApp extends StatelessWidget {
 """
         return None
 
+    
+    
     def _log(self, message: str):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"[{timestamp}] {message}")
-
+        from datetime import datetime
+        import sys
+        safe_msg = message.encode('ascii', errors='replace').decode('ascii')
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        if sys.platform == 'win32':
+            try:
+                sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            except:
+                pass
+        print(f'[{timestamp}] {safe_msg}')
     def _generate_report(self, result: Dict):
         report_path = self.project_path / 'build_output' / 'build_report.json'
         report_path.parent.mkdir(parents=True, exist_ok=True)
