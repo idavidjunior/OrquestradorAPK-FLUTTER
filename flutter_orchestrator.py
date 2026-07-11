@@ -25,6 +25,10 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse
 
+from orchestrator.timeout_manager import AdaptiveTimeoutManager
+from orchestrator.ia_response_validator import IAResponseValidator
+from orchestrator.model_manager import IntelligentModelManager
+from orchestrator.kotlin_fixer import KotlinGradleFixer
 
 try:
     import yaml
@@ -211,6 +215,11 @@ class FlutterBuildOrchestrator:
         self._last_401_provider = None
         self._ai_context = []
         self._project_profile = {"packages": [], "errors_seen": [], "fixes_applied": []}
+
+        # Novos gerenciadores modulares
+        self._timeout_manager = AdaptiveTimeoutManager()
+        self._response_validator = IAResponseValidator()
+        self._model_manager = IntelligentModelManager()
 
     class _LogAdapter:
         """Adapta a fun\u00e7\u00e3o log(level, msg) da orchestrator para interface Logger (obj.ok/err/warn/info)."""
@@ -640,6 +649,14 @@ class FlutterBuildOrchestrator:
                 )
                 # Tamb\u00e9m aplica fix no settings.gradle para KGP
                 self._fix_kgp_in_settings()
+                # Usa KotlinGradleFixer para correcoes adicionais
+                try:
+                    kgp_fixer = KotlinGradleFixer(str(self.project_path))
+                    fix_result = kgp_fixer.apply_fixes()
+                    if fix_result['success']:
+                        self.log(f"KotlinGradleFixer: {len(fix_result['fixes_applied'])} correcoes aplicadas", "SUCCESS")
+                except Exception as kgp_e:
+                    self.log(f"KotlinGradleFixer: {kgp_e}", "WARNING")
                 return self.build_apk(release, build_number,
                                       _skip_gradle_check=True)
 
@@ -1025,10 +1042,17 @@ class FlutterBuildOrchestrator:
                                   "Authorization": f"Bearer {self.api_key}",
                               })
 
-            with urlopen(req, timeout=90) as r:
+            # Timeout adaptativo baseado em historico
+            ia_timeout = self._timeout_manager.get_timeout(_retry_count + 1, 'medium')
+            self.log(f"[IA] Timeout configurado: {ia_timeout}s (adaptativo)", "INFO")
+
+            with urlopen(req, timeout=ia_timeout) as r:
                 resp = json.loads(r.read())
 
             _elapsed = _time.time() - _t0
+
+            # Registra sucesso no gerenciador de timeout
+            self._timeout_manager.record_attempt(True, _elapsed, model, 'medium')
 
             if cfg["type"] == "gemini":
                 text = (resp.get("candidates", [{}])[0]
@@ -1059,6 +1083,14 @@ class FlutterBuildOrchestrator:
                 f"| in: {in_tok} out: {out_tok} tokens",
                 "SUCCESS"
             )
+
+            # Validacao robusta da resposta com IAResponseValidator
+            is_valid, extracted_code, validation_errors = self._response_validator.validate_and_extract(fixed)
+            if not is_valid:
+                self.log(f"[IA] Validacao falhou: {validation_errors}", "WARNING")
+            elif extracted_code:
+                fixed = extracted_code
+                self.log("[IA] Resposta validada e extraida com sucesso", "SUCCESS")
 
             # --- Parse JSON output or fallback to free-text format ---
             file_fixes = {}
@@ -1146,6 +1178,13 @@ class FlutterBuildOrchestrator:
             http_code = e.code
             reason = str(e.reason)[:100] if e.reason else ""
             _elapsed = _time.time() - _t0
+
+            # Registra falha no timeout manager
+            self._timeout_manager.record_attempt(False, _elapsed, model, 'medium')
+
+            # Registra falha no model manager
+            self._model_manager.record_model_result(model, False, _elapsed)
+
             self.log(
                 f"[IA] \u2716 {model} HTTP {http_code} ({_elapsed:.1f}s)"
                 f"{': ' + reason if reason else ''}",
@@ -1187,6 +1226,11 @@ class FlutterBuildOrchestrator:
             return None
         except URLError as e:
             _elapsed = _time.time() - _t0
+
+            # Registra falha nos gerenciadores
+            self._timeout_manager.record_attempt(False, _elapsed, model, 'medium')
+            self._model_manager.record_model_result(model, False, _elapsed)
+
             reason = str(e.reason)[:200] if hasattr(e, 'reason') and e.reason else str(e)[:200]
             if _retry_count < 3:
                 wait = (_retry_count + 1) * 2
@@ -1210,6 +1254,8 @@ class FlutterBuildOrchestrator:
             )
         except Exception as e:
             _elapsed = _time.time() - _t0
+            self._timeout_manager.record_attempt(False, _elapsed, model, 'medium')
+            self._model_manager.record_model_result(model, False, _elapsed)
             self.log(
                 f"[IA] \u2716 Exce\u00e7\u00e3o ({_elapsed:.1f}s): {str(e)[:150]}",
                 "ERROR"

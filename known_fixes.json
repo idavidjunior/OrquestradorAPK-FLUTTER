@@ -3,7 +3,7 @@
     "version": "2.0",
     "description": "Cérebro do OrquestradorAPK — erros conhecidos e suas correções. Cresce automaticamente a cada novo erro resolvido.",
     "total_fixes_applied": 4,
-    "last_updated": "2026-07-09"
+    "last_updated": "2026-07-11"
   },
   "fixes": [
     {
@@ -1553,6 +1553,18 @@
       "explanation": "O orquestrador extrai o caminho do build.gradle problemático do stacktrace, lê o AndroidManifest.xml do mesmo diretório para obter o package, e injeta 'namespace' logo após 'android {'.",
       "times_applied": 0,
       "source": "manual"
+    },
+    {
+      "id": "failed_c1d15a8a",
+      "description": "Falha não resolvida: WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): on_audio_query_a...",
+      "error_patterns": [
+        "WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): on_audio_query_android\nFuture versions of Flutter will fail to build if your app uses plugins that apply KGP.\n\nPleas"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
     }
   ],
   "package_versions": {
