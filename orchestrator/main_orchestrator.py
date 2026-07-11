@@ -187,48 +187,59 @@ class FlutterOrchestrator:
                 'error': str(e),
                 'time': time.time() - start_time
             }
-
     async def _attempt_fix(self, error: str) -> Dict[str, bool]:
-        # 1. Tenta correcoes locais conhecidas
-        self._log("Tentando correcoes locais...")
-        if self._apply_local_fix(error):
-            return {'success': True}
-
-        # 2. Busca na KnowledgeBase
-        self._log("Buscando na KnowledgeBase...")
+        """Tenta corrigir erro - prioridade: local -> KB -> IA"""
+        if "Kotlin" in error or "KGP" in error or "build.gradle.kts" in error:
+            self._log("[FIX] Aplicando correcao Kotlin forcada...")
+            kts = self.project_path / "android" / "app" / "build.gradle.kts"
+            if kts.exists():
+                kts.unlink()
+                self._log("[FIX] build.gradle.kts removido")
+            gradle = self.project_path / "android" / "app" / "build.gradle"
+            with open(gradle, 'w', encoding='utf-8') as f:
+                f.write('''android {
+                    compileSdkVersion 34
+                    namespace "com.example.app"
+                    compileOptions {
+                        sourceCompatibility JavaVersion.VERSION_17
+                        targetCompatibility JavaVersion.VERSION_17
+                    }
+                    kotlinOptions {
+                        jvmTarget = "17"
+                    }
+                }
+                
+                dependencies {
+                    implementation 'androidx.core:core-ktx:1.12.0'
+                    implementation 'androidx.appcompat:appcompat:1.6.1'
+                }''')
+            self._log('[FIX] build.gradle recriado')
+            import subprocess
+            subprocess.run(["flutter", "clean"], cwd=self.project_path, capture_output=True)
+            subprocess.run(["flutter", "pub", "get"], cwd=self.project_path, capture_output=True)
+            return {"success": True}
         solution, confidence = self.kb_learner.get_solution(error)
         if solution and confidence > 0.5:
-            self._log(f"Solucao encontrada (confianca: {confidence:.2%})")
-            await self._apply_fix(solution)
-            return {'success': True}
-
-        # 3. Tenta IA com retry e validação
-        self._log("Buscando solucao com IA...")
+            self._log(f"[KB] Solucao encontrada (confianca: {confidence:.2%})")
+            if await self._apply_ia_fix(solution):
+                return {"success": True}
+        self._log("[IA] Buscando solucao...")
         for attempt in range(1, 4):
-            self._log(f"  Tentativa IA {attempt}/3...")
             ia_solution = await self._get_ia_solution_with_retry(error, attempt)
             if ia_solution:
-                is_valid, code, val_errors = self.response_validator.validate_and_extract(ia_solution)
+                if len(ia_solution) < 200:
+                    self._log(f"[IA] Resposta muito curta ({len(ia_solution)} chars), ignorando")
+                    continue
+                is_valid, code, errors = self.response_validator.validate_and_extract(ia_solution)
                 if is_valid and code:
                     await self._apply_fix(code)
-                    self._log("Correcao IA aplicada com sucesso")
-                    return {'success': True}
-                else:
-                    self._log(f"  Validacao falhou: {val_errors}")
-                    extracted = self.response_validator.force_code_extraction(ia_solution)
-                    if extracted:
-                        await self._apply_fix(extracted)
-                        self._log("Correcao extraida com sucesso (force extraction)")
-                        return {'success': True}
+                    return {"success": True}
+                extracted = self.response_validator.force_code_extraction(ia_solution)
+                if extracted:
+                    await self._apply_fix(extracted)
+                    return {"success": True}
+        return {"success": False}
 
-        # 4. Fallback: template generico
-        self._log("Usando template generico de fallback...")
-        template = self._get_fallback_template(error)
-        if template:
-            await self._apply_fix(template)
-            return {'success': True}
-
-        return {'success': False}
 
     def _apply_local_fix(self, error: str) -> bool:
         if 'Kotlin' in error or 'KGP' in error or 'kotlin' in error:
