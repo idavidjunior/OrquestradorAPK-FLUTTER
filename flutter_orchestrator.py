@@ -903,9 +903,15 @@ class FlutterBuildOrchestrator:
                       extra_files: Optional[dict] = None,
                       _retry_count: int = 0,
                       _tier: int = 1) -> Optional[str]:
-        """Chama a API de IA para corrigir o c\u00f3digo com base nos erros.
-        _tier: 1=simples, 2=m\u00e9dio (+KB+categorias), 3=completo (+hist\u00f3rico+perfil)
+        """Chama a API de IA para corrigir o código com base nos erros.
+        _tier: 1=simples, 2=médio (+KB+categorias), 3=completo (+histórico+perfil)
         """
+        _debug_entry = None
+        try:
+            from gui.ai_debug import get_debug_logger as _get_dl
+            _debug_logger = _get_dl()
+        except Exception:
+            _debug_logger = None
         if not self.api_key or not self.api_provider:
             return None
 
@@ -984,6 +990,33 @@ class FlutterBuildOrchestrator:
             "7. Se n\u00e3o houver o que corrigir, retorne: {\"ok\": true}"
         )
         prompt = "\n".join(prompt_parts)
+        _debug_prompt = prompt
+        _debug_model = model
+        _debug_tier = _tier
+        _debug_provider = self.api_provider
+        _debug_response = ""
+        _debug_success = False
+        _debug_extracted = ""
+        _debug_valid_errors = []
+        _debug_error = ""
+        _debug_elapsed = 0
+
+        def _log_ai_debug(result_val=None):
+            nonlocal _debug_success
+            _debug_success = result_val is not None or _debug_success
+            if _debug_logger:
+                _debug_logger.add_entry(
+                    prompt=_debug_prompt,
+                    response=_debug_response or _debug_error or "",
+                    provider=_debug_provider or "",
+                    model=_debug_model or "",
+                    tier=_debug_tier,
+                    elapsed=_debug_elapsed or 0,
+                    success=_debug_success,
+                    extracted_code=_debug_extracted,
+                    validation_errors=_debug_valid_errors,
+                    error_info=_debug_error,
+                )
 
         payload_bytes = len(prompt.encode("utf-8"))
         self.log(
@@ -1077,6 +1110,8 @@ class FlutterBuildOrchestrator:
                 out_tok = usage.get("completion_tokens", 0)
 
             fixed = text.strip()
+            _debug_response = fixed
+            _debug_elapsed = _elapsed
             self.log(
                 f"[IA] Resposta em {_elapsed:.1f}s "
                 f"| {len(fixed)} chars "
@@ -1087,9 +1122,11 @@ class FlutterBuildOrchestrator:
             # Validacao robusta da resposta com IAResponseValidator
             is_valid, extracted_code, validation_errors = self._response_validator.validate_and_extract(fixed)
             if not is_valid:
+                _debug_valid_errors = validation_errors
                 self.log(f"[IA] Validacao falhou: {validation_errors}", "WARNING")
             elif extracted_code:
                 fixed = extracted_code
+                _debug_extracted = extracted_code
                 self.log("[IA] Resposta validada e extraida com sucesso", "SUCCESS")
 
             # --- Parse JSON output or fallback to free-text format ---
@@ -1108,6 +1145,8 @@ class FlutterBuildOrchestrator:
                 if isinstance(parsed, dict):
                     if parsed.get("ok"):
                         self.log("[IA] IA indicou que n\u00e3o h\u00e1 o que corrigir", "INFO")
+                        _debug_success = True
+                        _log_ai_debug(code)
                         return code
                     files_dict = parsed.get("files", {})
                     if files_dict:
@@ -1160,18 +1199,26 @@ class FlutterBuildOrchestrator:
                         # --- Verification loop: flutter analyze ---
                         if self._verify_fix_with_analyze():
                             self.log("[IA] An\u00e1lise passou ap\u00f3s corre\u00e7\u00e3o", "SUCCESS")
+                            _debug_success = True
+                            _log_ai_debug(main_fix)
                             return main_fix
                         self.log("[IA] An\u00e1lise ainda com erros — tentando novamente com +contexto", "WARNING")
+                        _debug_success = True
+                        _log_ai_debug(main_fix)
                         return main_fix  # retorna mesmo assim, o loop externo lidar\u00e1
                     self.log(f"IA retornou conteudo nao-Dart para main.dart (ignorado)", "WARNING")
                 self.log("Nao foi possivel extrair correcao valida para main.dart", "WARNING")
+                _log_ai_debug(None)
                 return None
 
             # Fallback: single text block
             if len(fixed) > 50:
                 self.log(f"IA retornou {len(fixed)} caracteres (formato livre)", "SUCCESS")
+                _debug_success = True
+                _log_ai_debug(fixed)
                 return fixed
             self.log("IA retornou conte\u00fado muito curto", "WARNING")
+            _log_ai_debug(None)
             return None
 
         except HTTPError as e:
@@ -1205,6 +1252,8 @@ class FlutterBuildOrchestrator:
                             f"em {cur} — chave sem permissão de inferência",
                             "ERROR"
                         )
+                        _debug_error = f"{self._consecutive_401}x 401 consecutivos em {cur}"
+                        _log_ai_debug(None)
                         return None
                 remaining = [m for m in self._model_fallback_list
                              if m != model]
@@ -1223,9 +1272,12 @@ class FlutterBuildOrchestrator:
                     return self._ai_fix_code(errors, code, extra_files)
                 self.log("[IA] Todos os modelos de fallback esgotados", "ERROR")
                 self._consecutive_401 = 0
+            _debug_error = f"HTTP {http_code}: {reason}"
+            _log_ai_debug(None)
             return None
         except URLError as e:
             _elapsed = _time.time() - _t0
+            _debug_error = str(e.reason)[:200] if hasattr(e, 'reason') else str(e)[:200]
 
             # Registra falha nos gerenciadores
             self._timeout_manager.record_attempt(False, _elapsed, model, 'medium')
@@ -1260,6 +1312,8 @@ class FlutterBuildOrchestrator:
                 f"[IA] \u2716 Exce\u00e7\u00e3o ({_elapsed:.1f}s): {str(e)[:150]}",
                 "ERROR"
             )
+            _debug_error = str(e)[:200]
+        _log_ai_debug(None)
         return None
 
     def _read_file_safe(self, *parts) -> Optional[str]:

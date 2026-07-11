@@ -27,6 +27,7 @@ from typing import Optional
 from gui.logger import Logger
 from gui.knowledge_base import KnowledgeBase
 from gui.project_source import ProjectSourceManager
+from gui.ai_debug_window import AIDebugWindow
 from flutter_orchestrator import FlutterBuildOrchestrator
 
 
@@ -128,6 +129,7 @@ def run():
             self._model_fallback_cache = {}
             self._ollama_models_cache = []
             self._bad_models = set()
+            self._ai_debug_win = None
 
             self._build_ui()
             self._load_state()
@@ -376,6 +378,13 @@ def run():
                 command=self._open_output,
             )
             self.btn_open_output.pack(fill="x", pady=2)
+
+            self.btn_ai_debug = ctk.CTkButton(
+                util_frame, text="Debug IA",
+                fg_color="#E65100", hover_color="#BF360C",
+                command=self._open_ai_debug,
+            )
+            self.btn_ai_debug.pack(fill="x", pady=2)
 
             # ── Right panel (progresso + reestruturação + log) ──────────
             right = ctk.CTkFrame(self)
@@ -2020,6 +2029,11 @@ def run():
                 self.log.ok(f"Pasta aberta: {pasta}")
             except Exception as e:
                 self.log.err(f"Erro ao abrir pasta: {e}")
+
+        def _open_ai_debug(self):
+            if not hasattr(self, '_ai_debug_win') or self._ai_debug_win is None:
+                self._ai_debug_win = AIDebugWindow(self)
+            self._ai_debug_win.show()
 
     # --- Bootstrap ---
     app = BuildOrchestratorGUI()
