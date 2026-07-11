@@ -1049,6 +1049,35 @@ def run():
                         f"Modelo recuperado automaticamente: {mid}"
                     )
                     return
+            # Se os 5 primeiros falharam, tenta re-buscar lista completa
+            self.log.info(
+                "Fallbacks iniciais falharam — re-buscando lista completa de modelos..."
+            )
+            try:
+                fresh = self._list_models_for_provider(provider, self.api_key)
+                if fresh:
+                    self._model_fallback_cache[provider] = fresh
+                    for mid in fresh[:10]:
+                        if mid == current:
+                            continue
+                        self._update_ai_status("testing", f"Testando: {mid}...")
+                        ok = self._test_chat_model(provider, self.api_key, mid)
+                        if ok:
+                            self._auto_selected_models[provider] = mid
+                            if provider in self.OPENAI_COMPATIBLE:
+                                self.OPENAI_COMPATIBLE[provider] = (
+                                    self.OPENAI_COMPATIBLE[provider][0], mid
+                                )
+                            elif provider in self._custom_providers:
+                                self._custom_providers[provider]["model"] = mid
+                            self._update_ai_status(
+                                "connected",
+                                f"Recuperado \u2192 {provider}/{mid} OK"
+                            )
+                            self.log.ok(f"Modelo recuperado via nova lista: {mid}")
+                            return
+            except Exception as e:
+                self.log.warn(f"Erro ao re-buscar modelos: {e}")
             self._update_ai_status(
                 "error",
                 f"{provider}: nenhum modelo alternativo funcional"

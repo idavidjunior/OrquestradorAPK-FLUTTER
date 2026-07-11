@@ -760,19 +760,35 @@ class FlutterBuildOrchestrator:
         code = main_dart.read_text(encoding="utf-8")
         fixed = self._ai_fix_code("Pre-build AI scan: analyze for potential compilation issues", code, {})
         if fixed and fixed != code:
-            if not self._is_dart_code(fixed):
-                self.log("IA retornou conteudo nao-Dart no pre-build scan (ignorado)", "WARNING")
-                return True
-            backup = self._backup_file(main_dart)
-            if backup:
-                self.log(f"Backup pre-build: {backup.name}", "INFO")
-            main_dart.write_text(fixed, encoding="utf-8")
-            valid = self._validate_dart_syntax(fixed)
-            if not valid:
-                self.log("Sintaxe Dart nao confirmada apos scan IA (prosseguindo)", "WARNING")
-            self.log("IA corrigiu codigo preventivamente antes do build", "SUCCESS")
-            if self.kb_path:
-                self._learn_from_success("pre-build AI scan", fixed[:500])
+            if self._is_dart_code(fixed):
+                backup = self._backup_file(main_dart)
+                if backup:
+                    self.log(f"Backup pre-build: {backup.name}", "INFO")
+                main_dart.write_text(fixed, encoding="utf-8")
+                valid = self._validate_dart_syntax(fixed)
+                if not valid:
+                    self.log("Sintaxe Dart nao confirmada apos scan IA (prosseguindo)", "WARNING")
+                self.log("IA corrigiu codigo preventivamente antes do build", "SUCCESS")
+                if self.kb_path:
+                    self._learn_from_success("pre-build AI scan", fixed[:500])
+            else:
+                # Tenta aplicar como JSON de m\u00faltiplos arquivos mesmo sem ser Dart puro
+                try:
+                    parsed = json.loads(fixed.strip().strip("`").replace("json","").strip())
+                    if isinstance(parsed, dict) and "files" in parsed:
+                        applied = 0
+                        for rel_path, content in parsed["files"].items():
+                            abs_path = self.project_path / rel_path
+                            if abs_path.exists() or not abs_path.parent.exists():
+                                if not abs_path.parent.exists():
+                                    abs_path.parent.mkdir(parents=True, exist_ok=True)
+                                abs_path.write_text(content.strip() + "\n", encoding="utf-8")
+                                self.log(f"Pre-build: {rel_path} corrigido", "SUCCESS")
+                                applied += 1
+                        if applied:
+                            self.log(f"IA corrigiu {applied} arquivo(s) no pre-build scan", "SUCCESS")
+                except Exception:
+                    self.log("IA retornou conteudo nao-Dart no pre-build scan (ignorado)", "WARNING")
         return True
 
     def _apply_pre_build_fixes(self) -> bool:
@@ -995,12 +1011,13 @@ class FlutterBuildOrchestrator:
                               })
 
             else:  # openai-compatible
+                max_tok = 8192 if _tier >= 3 else 4096
                 url = f"{cfg['url'].rstrip('/')}/chat/completions"
                 payload = json.dumps({
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
-                    "max_tokens": 4096,
+                    "max_tokens": max_tok,
                 })
                 req = Request(url, data=payload.encode(), method="POST",
                               headers={
@@ -1459,9 +1476,8 @@ class FlutterBuildOrchestrator:
                 cwd=self.project_path,
                 capture_output=True, text=True, timeout=120,
             )
-            errors = [l for l in r.stderr.split("\n") if "error" in l.lower()]
-            if r.stdout:
-                errors += [l for l in r.stdout.split("\n") if "error" in l.lower()]
+            combined = r.stdout + "\n" + r.stderr
+            errors = [l for l in combined.split("\n") if ": error:" in l.lower()]
             if errors:
                 self.log(f"flutter analyze: {len(errors)} erro(s) encontrado(s)", "WARNING")
                 for e in errors[:3]:
