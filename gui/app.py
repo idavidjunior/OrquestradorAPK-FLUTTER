@@ -228,6 +228,7 @@ def run():
 
             self.paste_text = ctk.CTkTextbox(left, height=130, wrap="word")
             self.paste_text.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
+            self.paste_text.bind("<KeyRelease>", self._on_paste_key)
 
             paste_btn_row = ctk.CTkFrame(left, fg_color="transparent")
             paste_btn_row.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
@@ -518,6 +519,26 @@ def run():
         # ==================================================================
         #  Handlers — colar c\u00f3digo (inteligente)
         # ==================================================================
+
+        def _on_paste_key(self, event=None):
+            raw = self.paste_text.get("0.0", "end").strip()
+            if len(raw) < 50:
+                return
+            if getattr(self, "_paste_after_id", None):
+                self.after_cancel(self._paste_after_id)
+            self._paste_after_id = self.after(800, self._auto_process_paste)
+
+        def _auto_process_paste(self):
+            self._paste_after_id = None
+            raw = self.paste_text.get("0.0", "end").strip()
+            if len(raw) < 50:
+                return
+            if self.build_running:
+                return
+            self.log.info("C\u00f3digo detectado automaticamente — analisando...")
+            threading.Thread(
+                target=self._do_process_paste, args=(raw,), daemon=True
+            ).start()
 
         def _process_pasted_code(self):
             raw = self.paste_text.get("0.0", "end").strip()

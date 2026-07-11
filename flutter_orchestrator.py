@@ -209,6 +209,8 @@ class FlutterBuildOrchestrator:
         self._fallback_attempt = 0
         self._consecutive_401 = 0
         self._last_401_provider = None
+        self._ai_context = []
+        self._project_profile = {"packages": [], "errors_seen": [], "fixes_applied": []}
 
     class _LogAdapter:
         """Adapta a fun\u00e7\u00e3o log(level, msg) da orchestrator para interface Logger (obj.ok/err/warn/info)."""
@@ -910,10 +912,28 @@ class FlutterBuildOrchestrator:
         except Exception:
             pass
 
+        categorized = self._categorize_errors(errors[:3000])
+        ctx = ""
+        if self._ai_context:
+            ctx = "\nHIST\u00d3RICO DE CORRE\u00c7\u00d5ES ANTERIORES:\n"
+            for entry in self._ai_context[-3:]:
+                ctx += f"  - Tentou: {entry.get('attempt', '?')}\n"
+                ctx += f"    Erro: {entry.get('error', '?')[:200]}\n"
+                if entry.get('result'):
+                    ctx += f"    Resultado: {entry['result'][:200]}\n"
+
+        profile = ""
+        if self._project_profile.get("packages"):
+            profile = "\nPACOTES DO PROJETO:\n"
+            for pkg in self._project_profile["packages"][:10]:
+                profile += f"  - {pkg}\n"
+
         prompt = (
             "Voc\u00ea \u00e9 um especialista s\u00eanior em Flutter/Dart/Android/Kotlin/Gradle.\n"
-            "Seu objetivo \u00e9 corrigir o c\u00f3digo abaixo para que ele compile em APK.\n\n"
-            f"ERROS DO COMPILADOR:\n{errors[:3000]}\n\n"
+            "Seu objetivo \u00e9 corrigir o c\u00f3digo abaixo para que ele compile em APK.\n"
+            f"{profile}"
+            f"{ctx}"
+            f"\nERROS DO COMPILADOR:\n{categorized[:3000]}\n\n"
             "C\u00d3DIGO DART (main.dart):\n"
             f"```dart\n{code[:4000]}\n```\n"
             f"{extra}\n"
@@ -934,6 +954,8 @@ class FlutterBuildOrchestrator:
             "7. Mantenha arquivos sem erros inalterados — n\u00e3o os inclua na resposta\n"
             "8. Se for adicionar depend\u00eancia no pubspec.yaml, "
             "use a sintaxe correta: nome: ^vers\u00e3o\n"
+            "9. Se o erro for sobre KGP (Kotlin Gradle Plugin), "
+            "adicione resolutionStrategy no settings.gradle\n"
             "IMPORTANTE: Inclua APENAS arquivos que precisam de corre\u00e7\u00e3o."
         )
 
@@ -1324,6 +1346,14 @@ class FlutterBuildOrchestrator:
                 files["main.dart"] = code
 
             fixed = self._ai_fix_code(accumulated_errors, code, files)
+            self._ai_context.append({
+                "attempt": attempt,
+                "error": accumulated_errors[:300],
+                "result": fixed[:300] if fixed else "None",
+            })
+            if len(self._ai_context) > 10:
+                self._ai_context = self._ai_context[-10:]
+
             if not fixed:
                 if attempt < max_retries:
                     accumulated_errors += "\n[IA nao retornou correcao]"
@@ -1345,6 +1375,7 @@ class FlutterBuildOrchestrator:
             self._fix_cache[cache_key] = {}
             self._last_errors = accumulated_errors[:500]
             self._last_fix_applied = True
+            self._project_profile["fixes_applied"].append(accumulated_errors[:200])
 
             ok = self._retry_build(release, build_number)
             if ok:
@@ -1358,6 +1389,32 @@ class FlutterBuildOrchestrator:
 
         self.log(f"Corre\u00e7\u00e3o falhou ap\u00f3s {max_retries} tentativas", "ERROR")
         return False
+
+    @staticmethod
+    def _categorize_errors(error_text: str) -> str:
+        cats = []
+        if re.search(r"(KGP|Kotlin Gradle Plugin|applies KGP)", error_text, re.I):
+            cats.append("[KGP] Plugin aplica Kotlin Gradle Plugin — adicionar resolutionStrategy no settings.gradle")
+        if re.search(r"(namespace|AndroidManifest)", error_text, re.I):
+            cats.append("[MANIFEST] Erro de namespace ou AndroidManifest.xml")
+        if re.search(r"(Gradle version|gradle.*version|AGP)", error_text, re.I):
+            cats.append("[GRADLE] Vers\u00e3o do Gradle/AGP incompat\u00edvel")
+        if re.search(r"(import.*not found|undefined name|Undefined class)", error_text, re.I):
+            cats.append("[IMPORT] Import ou classe n\u00e3o encontrada — verificar depend\u00eancias no pubspec.yaml")
+        if re.search(r"(null check operator|Null check|required non-null)", error_text, re.I):
+            cats.append("[NULL] Null safety — adicionar verifica\u00e7\u00e3o de null")
+        if re.search(r"(deprecated|removed|migrated)", error_text, re.I):
+            cats.append("[DEPRECATED] API deprecated — atualizar para vers\u00e3o recomendada")
+        if re.search(r"(syntax|unexpected token|Expected '|Missing )", error_text, re.I):
+            cats.append("[SYNTAX] Erro de sintaxe Dart/XML/Gradle")
+        if re.search(r"(timeout|TimeoutExpired)", error_text, re.I):
+            cats.append("[TIMEOUT] Opera\u00e7\u00e3o excedeu tempo limite")
+        if re.search(r"(network|connection refused|getaddrinfo|Name or service not known)", error_text, re.I):
+            cats.append("[NETWORK] Erro de rede — verificar conex\u00e3o com internet")
+        if not cats:
+            cats.append("[GERAL] Erro n\u00e3o categorizado")
+        header = "CATEGORIAS DOS ERROS:\n" + "\n".join(cats) + "\n\n"
+        return header + error_text
 
     def _capture_last_build_error(self) -> Optional[str]:
         try:
@@ -1405,8 +1462,22 @@ class FlutterBuildOrchestrator:
             self.log(f"Erro no retry: {e}", "ERROR")
             return False
 
+    def _update_project_profile(self):
+        """Atualiza perfil do projeto com depend\u00eancias detectadas."""
+        try:
+            pubspec = self.project_path / "pubspec.yaml"
+            if pubspec.exists():
+                text = pubspec.read_text(encoding="utf-8")
+                deps = re.findall(r'^\s+(\w[\w-]*):', text, re.MULTILINE)
+                self._project_profile["packages"] = list(set(
+                    self._project_profile["packages"] + deps
+                ))
+        except Exception:
+            pass
+
     def _learn_from_success(self, errors: str, fix_snippet: str):
         """Persiste o par erro+corre\u00e7\u00e3o no known_fixes.json no formato da KnowledgeBase."""
+        self._update_project_profile()
         if not self.kb_path:
             return
         try:
