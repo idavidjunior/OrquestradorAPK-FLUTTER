@@ -868,8 +868,11 @@ class FlutterBuildOrchestrator:
 
     def _ai_fix_code(self, errors: str, code: str,
                       extra_files: Optional[dict] = None,
-                      _retry_count: int = 0) -> Optional[str]:
-        """Chama a API de IA para corrigir o c\u00f3digo com base nos erros."""
+                      _retry_count: int = 0,
+                      _tier: int = 1) -> Optional[str]:
+        """Chama a API de IA para corrigir o c\u00f3digo com base nos erros.
+        _tier: 1=simples, 2=m\u00e9dio (+KB+categorias), 3=completo (+hist\u00f3rico+perfil)
+        """
         if not self.api_key or not self.api_provider:
             return None
 
@@ -878,7 +881,6 @@ class FlutterBuildOrchestrator:
             self.log(f"Provedor IA n\u00e3o configurado: {self.api_provider}", "WARNING")
             return None
 
-        # Usa api_model se foi fornecido (auto-selecionado pelo GUI)
         model = self.api_model or cfg["model"]
         extra = ""
         if extra_files:
@@ -886,83 +888,74 @@ class FlutterBuildOrchestrator:
                 if name != "main.dart" and content:
                     extra += f"\nARQUIVO ({name}):\n```\n{content[:1500]}\n```\n"
 
-        kb_hints = ""
-        try:
-            from gui.knowledge_base import KnowledgeBase
-            kb_log = type('_', (), {'ok': lambda s: None, 'warn': lambda s: None,
-                                     'err': lambda s: None, 'info': lambda s: None})()
-            kb = KnowledgeBase(kb_log)
-            kb_fixes = kb._db.get("fixes", [])
-            if kb_fixes:
-                categories = {}
-                for f in kb_fixes:
-                    cat = f.get("type", "generic")
-                    desc = f.get("description", "")
-                    pats = f.get("error_patterns", [])
-                    if cat not in categories:
-                        categories[cat] = []
-                    categories[cat].append({"desc": desc, "pats": pats[:3]})
-                kb_hints = "\nPADR\u00d5ES DE ERRO CONHECIDOS (KnowledgeBase):\n"
-                for cat, items in categories.items():
-                    kb_hints += f"\n  [{cat}]\n"
-                    for item in items[:5]:
-                        kb_hints += f"    - {item['desc']}\n"
-                        for p in item['pats'][:2]:
-                            kb_hints += f"      padr\u00e3o: {p[:100]}\n"
-        except Exception:
-            pass
+        # --- Montagem do prompt por tier ---
+        prompt_parts = [
+            "Voc\u00ea \u00e9 um especialista s\u00eanior em Flutter/Dart/Android/Kotlin/Gradle.",
+            "Seu objetivo \u00e9 corrigir o c\u00f3digo abaixo para que ele compile em APK.",
+        ]
 
-        categorized = self._categorize_errors(errors[:3000])
-        ctx = ""
-        if self._ai_context:
-            ctx = "\nHIST\u00d3RICO DE CORRE\u00c7\u00d5ES ANTERIORES:\n"
-            for entry in self._ai_context[-3:]:
-                ctx += f"  - Tentou: {entry.get('attempt', '?')}\n"
-                ctx += f"    Erro: {entry.get('error', '?')[:200]}\n"
-                if entry.get('result'):
-                    ctx += f"    Resultado: {entry['result'][:200]}\n"
+        if _tier >= 3:
+            profile = ""
+            if self._project_profile.get("packages"):
+                profile = "\nPACOTES DO PROJETO:\n" + "\n".join(
+                    f"  - {p}" for p in self._project_profile["packages"][:10]
+                ) + "\n"
+                prompt_parts.append(profile)
+            ctx = ""
+            if self._ai_context:
+                ctx = "HIST\u00d3RICO DE CORRE\u00c7\u00d5ES ANTERIORES (para evitar repetir):\n"
+                for entry in self._ai_context[-3:]:
+                    ctx += f"  - Tentativa {entry.get('attempt')}: erro={entry.get('error','')[:150]}\n"
+                    if entry.get('result'):
+                        ctx += f"    resultado={entry['result'][:150]}\n"
+                prompt_parts.append(ctx)
 
-        profile = ""
-        if self._project_profile.get("packages"):
-            profile = "\nPACOTES DO PROJETO:\n"
-            for pkg in self._project_profile["packages"][:10]:
-                profile += f"  - {pkg}\n"
+        if _tier >= 2:
+            categorized = self._categorize_errors(errors[:4000])
+            prompt_parts.append(f"ERROS DO COMPILADOR:\n{categorized[:4000]}")
+            kb_hints = ""
+            try:
+                from gui.knowledge_base import KnowledgeBase
+                kb_log = type('_', (), {'ok': lambda s: None, 'warn': lambda s: None,
+                                         'err': lambda s: None, 'info': lambda s: None})()
+                kb = KnowledgeBase(kb_log)
+                kbf = kb._db.get("fixes", [])
+                if kbf:
+                    cats = {}
+                    for f in kbf:
+                        ct = f.get("type", "generic")
+                        if ct not in cats: cats[ct] = []
+                        cats[ct].append(f.get("description",""))
+                    kb_hints = "PADR\u00d5ES CONHECIDOS (KnowledgeBase):\n"
+                    for ct, items in cats.items():
+                        kb_hints += f"  [{ct}]: {', '.join(items[:3])}\n"
+                prompt_parts.append(kb_hints)
+            except Exception:
+                pass
+        else:
+            prompt_parts.append(f"ERROS DO COMPILADOR:\n{errors[:3000]}")
 
-        prompt = (
-            "Voc\u00ea \u00e9 um especialista s\u00eanior em Flutter/Dart/Android/Kotlin/Gradle.\n"
-            "Seu objetivo \u00e9 corrigir o c\u00f3digo abaixo para que ele compile em APK.\n"
-            f"{profile}"
-            f"{ctx}"
-            f"\nERROS DO COMPILADOR:\n{categorized[:3000]}\n\n"
-            "C\u00d3DIGO DART (main.dart):\n"
-            f"```dart\n{code[:4000]}\n```\n"
-            f"{extra}\n"
-            f"{kb_hints}\n"
+        prompt_parts.append(f"C\u00d3DIGO DART (main.dart):\n```dart\n{code[:4000]}\n```")
+        if extra:
+            prompt_parts.append(extra)
+
+        prompt_parts.append(
             "TAREFA:\n"
-            "1. Analise CADA erro individualmente e corrija a causa raiz\n"
-            "2. Mantenha a l\u00f3gica e funcionalidade originais do app\n"
-            "3. Corrija APENAS o necess\u00e1rio para compilar sem erros\n"
-            "4. Se o erro for em AndroidManifest.xml, build.gradle, "
-            "settings.gradle ou pubspec.yaml, corrija esses arquivos tamb\u00e9m\n"
-            "5. Verifique imports ausentes, tipos incorretos, sintaxe Dart/XML/Gradle inv\u00e1lida\n"
-            "6. Retorne APENAS o conte\u00fado corrigido do(s) arquivo(s),"
-            " no formato:\n"
-            "   ARQUIVO: caminho/relativo\n"
-            "   ```\n"
-            "   conte\u00fado corrigido\n"
-            "   ```\n"
-            "7. Mantenha arquivos sem erros inalterados — n\u00e3o os inclua na resposta\n"
-            "8. Se for adicionar depend\u00eancia no pubspec.yaml, "
-            "use a sintaxe correta: nome: ^vers\u00e3o\n"
-            "9. Se o erro for sobre KGP (Kotlin Gradle Plugin), "
-            "adicione resolutionStrategy no settings.gradle\n"
-            "IMPORTANTE: Inclua APENAS arquivos que precisam de corre\u00e7\u00e3o."
+            "1. Analise CADA erro e corrija a causa raiz\n"
+            "2. Mantenha a l\u00f3gica e funcionalidade originais\n"
+            "3. Corrija APENAS o necess\u00e1rio para compilar\n"
+            "4. Retorne APENAS JSON v\u00e1lido neste formato:\n"
+            '   {"files": {"caminho/relativo": "conte\u00fado corrigido", ...}}\n'
+            "5. Inclua apenas arquivos que precisam de corre\u00e7\u00e3o\n"
+            "6. N\u00e3o use ```json nem explica\u00e7\u00f5es — apenas o JSON puro\n"
+            "7. Se n\u00e3o houver o que corrigir, retorne: {\"ok\": true}"
         )
+        prompt = "\n".join(prompt_parts)
 
         payload_bytes = len(prompt.encode("utf-8"))
         self.log(
-            f"[IA] {self.api_provider} \u2192 modelo: {model} "
-            f"| payload: {payload_bytes} bytes",
+            f"[IA] {self.api_provider} \u2192 {model} | tier {_tier} | "
+            f"payload: {payload_bytes} bytes",
             "INFO"
         )
         self._progress(50, f"IA ({self.api_provider}/{model}): corrigindo erros...")
@@ -979,7 +972,10 @@ class FlutterBuildOrchestrator:
                 )
                 payload = json.dumps({
                     "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.1, "maxOutputTokens": 8192},
+                    "generationConfig": {
+                        "temperature": 0.1, "maxOutputTokens": 8192,
+                        "responseMimeType": "application/json",
+                    },
                 })
                 req = Request(url, data=payload.encode(),
                               headers={"Content-Type": "application/json"})
@@ -1047,59 +1043,84 @@ class FlutterBuildOrchestrator:
                 "SUCCESS"
             )
 
-            # Parse multi-file output: ARQUIVO: path\n```\ncontent\n```
+            # --- Parse JSON output or fallback to free-text format ---
             file_fixes = {}
-            current_file = None
-            current_content = []
-            in_block = False
-            for line in fixed.split("\n"):
-                m = re.match(r"^ARQUIVO:\s*(.+)$", line)
-                if m:
-                    if current_file and current_content:
-                        file_fixes[current_file] = "\n".join(current_content)
-                    current_file = m.group(1).strip()
-                    current_content = []
-                    in_block = False
-                elif line.strip().startswith("```"):
-                    in_block = not in_block
-                elif current_file is not None and not in_block:
-                    current_content.append(line)
-            if current_file and current_content:
-                file_fixes[current_file] = "\n".join(current_content)
+            main_fix = None
+            json_ok = False
+
+            # Try JSON first
+            json_str = fixed.strip()
+            if json_str.startswith("```"):
+                json_str = json_str.split("```")[1] if "```" in json_str else json_str
+            if json_str.startswith("json"):
+                json_str = json_str[4:].strip()
+            try:
+                parsed = json.loads(json_str)
+                if isinstance(parsed, dict):
+                    if parsed.get("ok"):
+                        self.log("[IA] IA indicou que n\u00e3o h\u00e1 o que corrigir", "INFO")
+                        return code
+                    files_dict = parsed.get("files", {})
+                    if files_dict:
+                        json_ok = True
+                        for rel_path, content in files_dict.items():
+                            file_fixes[rel_path] = content
+                            if rel_path in ("lib/main.dart", "main.dart"):
+                                main_fix = content
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            # Fallback: free-text ARQUIVO format
+            if not json_ok:
+                current_file = None
+                current_content = []
+                in_block = False
+                for line in fixed.split("\n"):
+                    m = re.match(r"^(?:ARQUIVO|FILE|ARQUIVO CORRIGIDO):\s*(.+)$", line)
+                    if m:
+                        if current_file and current_content:
+                            file_fixes[current_file] = "\n".join(current_content)
+                        current_file = m.group(1).strip()
+                        current_content = []
+                        in_block = False
+                    elif line.strip().startswith("```"):
+                        in_block = not in_block
+                    elif current_file is not None and not in_block:
+                        current_content.append(line)
+                if current_file and current_content:
+                    file_fixes[current_file] = "\n".join(current_content)
+                if not file_fixes and len(fixed) > 50:
+                    main_fix = fixed
+                    file_fixes["lib/main.dart"] = fixed
 
             if file_fixes:
                 self.log(f"IA corrigiu {len(file_fixes)} arquivo(s)", "SUCCESS")
-                main_fix = None
-                main_path = None
                 for rel_path, content in file_fixes.items():
                     abs_path = self.project_path / rel_path
-                    if abs_path.exists():
+                    if abs_path.exists() or not abs_path.parent.exists():
+                        if not abs_path.parent.exists():
+                            abs_path.parent.mkdir(parents=True, exist_ok=True)
                         abs_path.write_text(content.strip() + "\n", encoding="utf-8")
                         self.log(f"Corrigido: {rel_path}", "SUCCESS")
-                    elif not abs_path.parent.exists():
-                        abs_path.parent.mkdir(parents=True, exist_ok=True)
-                        abs_path.write_text(content.strip() + "\n", encoding="utf-8")
-                        self.log(f"Criado: {rel_path}", "SUCCESS")
                     else:
                         self.log(f"Arquivo nao encontrado (ignorado): {rel_path}", "WARNING")
                     if rel_path in ("lib/main.dart", "main.dart"):
                         main_fix = content
-                        main_path = rel_path
                 if main_fix:
                     if self._is_dart_code(main_fix):
-                        return main_fix
+                        # --- Verification loop: flutter analyze ---
+                        if self._verify_fix_with_analyze():
+                            self.log("[IA] An\u00e1lise passou ap\u00f3s corre\u00e7\u00e3o", "SUCCESS")
+                            return main_fix
+                        self.log("[IA] An\u00e1lise ainda com erros — tentando novamente com +contexto", "WARNING")
+                        return main_fix  # retorna mesmo assim, o loop externo lidar\u00e1
                     self.log(f"IA retornou conteudo nao-Dart para main.dart (ignorado)", "WARNING")
                 self.log("Nao foi possivel extrair correcao valida para main.dart", "WARNING")
                 return None
 
-            # Fallback: single Dart code block
-            if fixed.startswith("```"):
-                fixed = "\n".join(
-                    l for l in fixed.split("\n")
-                    if not l.strip().startswith("```")
-                ).strip()
+            # Fallback: single text block
             if len(fixed) > 50:
-                self.log(f"IA retornou {len(fixed)} caracteres", "SUCCESS")
+                self.log(f"IA retornou {len(fixed)} caracteres (formato livre)", "SUCCESS")
                 return fixed
             self.log("IA retornou conte\u00fado muito curto", "WARNING")
             return None
@@ -1344,20 +1365,25 @@ class FlutterBuildOrchestrator:
                 self.log(f"Tentativa {attempt}/{max_retries}...", "INFO")
                 code = main_dart.read_text(encoding="utf-8")
                 files["main.dart"] = code
+                self._update_project_profile()
 
-            fixed = self._ai_fix_code(accumulated_errors, code, files)
+            # Tiered prompting: attempt 1 = simples, 2 = m\u00e9dio, 3 = completo
+            tier = min(attempt, 3)
+            fixed = self._ai_fix_code(accumulated_errors, code, files, _tier=tier)
             self._ai_context.append({
                 "attempt": attempt,
+                "tier": tier,
                 "error": accumulated_errors[:300],
                 "result": fixed[:300] if fixed else "None",
             })
-            if len(self._ai_context) > 10:
-                self._ai_context = self._ai_context[-10:]
+            if len(self._ai_context) > 12:
+                self._ai_context = self._ai_context[-12:]
 
             if not fixed:
                 if attempt < max_retries:
                     accumulated_errors += "\n[IA nao retornou correcao]"
                     continue
+                self._learn_from_failure(accumulated_errors[:1000])
                 return False
 
             if not self._is_dart_code(fixed):
@@ -1365,6 +1391,7 @@ class FlutterBuildOrchestrator:
                 if attempt < max_retries:
                     accumulated_errors += "\n[IA retornou conteudo nao-Dart]"
                     continue
+                self._learn_from_failure(accumulated_errors[:1000])
                 return False
 
             backup = self._backup_file(main_dart)
@@ -1377,6 +1404,13 @@ class FlutterBuildOrchestrator:
             self._last_fix_applied = True
             self._project_profile["fixes_applied"].append(accumulated_errors[:200])
 
+            # Verification loop: se analyze falhar, acumula erros e tenta denovo
+            if not self._verify_fix_with_analyze():
+                analyze_err = "flutter analyze encontrou erros apos correcao"
+                accumulated_errors += "\n" + analyze_err
+                self.log("Re-tentando correcao com erros do analyze...", "INFO")
+                continue
+
             ok = self._retry_build(release, build_number)
             if ok:
                 if self.kb_path:
@@ -1388,6 +1422,7 @@ class FlutterBuildOrchestrator:
                 accumulated_errors += "\n" + err_text
 
         self.log(f"Corre\u00e7\u00e3o falhou ap\u00f3s {max_retries} tentativas", "ERROR")
+        self._learn_from_failure(accumulated_errors[:1000])
         return False
 
     @staticmethod
@@ -1416,7 +1451,63 @@ class FlutterBuildOrchestrator:
         header = "CATEGORIAS DOS ERROS:\n" + "\n".join(cats) + "\n\n"
         return header + error_text
 
-    def _capture_last_build_error(self) -> Optional[str]:
+    def _verify_fix_with_analyze(self) -> bool:
+        """Executa flutter analyze para verificar se corre\u00e7\u00f5es introduziram novos erros."""
+        try:
+            r = subprocess.run(
+                [self.flutter_cmd, "analyze"],
+                cwd=self.project_path,
+                capture_output=True, text=True, timeout=120,
+            )
+            errors = [l for l in r.stderr.split("\n") if "error" in l.lower()]
+            if r.stdout:
+                errors += [l for l in r.stdout.split("\n") if "error" in l.lower()]
+            if errors:
+                self.log(f"flutter analyze: {len(errors)} erro(s) encontrado(s)", "WARNING")
+                for e in errors[:3]:
+                    self.log(f"  {e.strip()[:200]}", "WARNING")
+                return False
+            self.log("flutter analyze: OK, sem erros", "SUCCESS")
+            return True
+        except Exception as e:
+            self.log(f"flutter analyze: {e}", "WARNING")
+            return True  # se falhar, n\u00e3o bloqueia
+
+    def _learn_from_failure(self, errors: str):
+        """Persiste erro que a IA n\u00e3o conseguiu corrigir para an\u00e1lise futura."""
+        if not self.kb_path:
+            return
+        try:
+            db = {"fixes": []}
+            if self.kb_path.exists():
+                db = json.loads(self.kb_path.read_text(encoding="utf-8"))
+                if isinstance(db, list):
+                    db = {"fixes": list(db), "_meta": {"converted_from_flat": True}}
+            fixes = db.setdefault("fixes", [])
+            err_hash = hashlib.md5(errors[:200].encode()).hexdigest()[:8]
+            already = any(f.get("id", "").endswith(err_hash) for f in fixes)
+            if already:
+                self.log("Falha j\u00e1 registrada na KnowledgeBase", "INFO")
+                return
+            entry = {
+                "id": "failed_" + err_hash,
+                "description": f"Falha n\u00e3o resolvida: {errors[:100]}...",
+                "error_patterns": [errors[:200]],
+                "context_patterns": [],
+                "type": "info_only",
+                "fix_hint": "IA n\u00e3o conseguiu corrigir automaticamente. "
+                            "Revisar manualmente o c\u00f3digo para este padr\u00e3o de erro.",
+                "times_applied": 0,
+                "source": "failed_attempt",
+            }
+            fixes.append(entry)
+            db["_meta"]["last_updated"] = datetime.now().strftime("%Y-%m-%d")
+            json_str = json.dumps(db, ensure_ascii=False, indent=2)
+            self.kb_path.parent.mkdir(parents=True, exist_ok=True)
+            self.kb_path.write_text(json_str, encoding="utf-8")
+            self.log("Falha registrada na KnowledgeBase para refer\u00eancia futura", "INFO")
+        except Exception as e:
+            self.log(f"Erro ao registrar falha: {e}", "WARNING")
         try:
             build_dir = self.project_path / "build"
             if not build_dir.exists():
