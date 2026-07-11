@@ -188,7 +188,15 @@ class FlutterOrchestrator:
                 'time': time.time() - start_time
             }
     async def _attempt_fix(self, error: str) -> Dict[str, bool]:
-        """Tenta corrigir erro - prioridade: local -> KB -> IA"""
+        """Tenta corrigir erro - prioridade: KB(confianca > 0.8) -> local -> IA -> fallback"""
+        # 0. KB com alta confianca: usa sem chamar IA
+        solution, confidence = self.kb_learner.get_solution(error)
+        if solution and confidence > 0.8:
+            self._log(f"[KB] Solucao de alta confianca ({confidence:.0%}), aplicando...")
+            if await self._apply_ia_fix(solution):
+                return {"success": True}
+
+        # 1. Correcao local forcada para erros Kotlin/KGP
         if "Kotlin" in error or "KGP" in error or "build.gradle.kts" in error:
             self._log("[FIX] Aplicando correcao Kotlin forcada...")
             kts = self.project_path / "android" / "app" / "build.gradle.kts"
@@ -217,12 +225,17 @@ class FlutterOrchestrator:
             import subprocess
             subprocess.run(["flutter", "clean"], cwd=self.project_path, capture_output=True)
             subprocess.run(["flutter", "pub", "get"], cwd=self.project_path, capture_output=True)
+            # Registra na KB como solucao 100% eficaz
+            self.kb_learner.learn(error, "Remover build.gradle.kts e recriar build.gradle com compileSdk 34")
             return {"success": True}
-        solution, confidence = self.kb_learner.get_solution(error)
+
+        # 2. KB com confianca media
         if solution and confidence > 0.5:
             self._log(f"[KB] Solucao encontrada (confianca: {confidence:.2%})")
             if await self._apply_ia_fix(solution):
                 return {"success": True}
+
+        # 3. IA com ate 3 tentativas
         self._log("[IA] Buscando solucao...")
         for attempt in range(1, 4):
             ia_solution = await self._get_ia_solution_with_retry(error, attempt)
@@ -238,7 +251,13 @@ class FlutterOrchestrator:
                 if extracted:
                     await self._apply_fix(extracted)
                     return {"success": True}
-        return {"success": False}
+
+        # 4. Fallback de ultimo recurso: correcao local + build direto sem IA
+        self._log("[FALLBACK] IA falhou apos 3 tentativas. Aplicando correcao local e build direto...")
+        fix_applied = self._apply_local_fix(error)
+        if fix_applied:
+            self.kb_learner.learn(error, "Correcao local aplicada com sucesso apos falha da IA")
+        return {"success": fix_applied}
 
 
     def _apply_local_fix(self, error: str) -> bool:
