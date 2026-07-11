@@ -1,0 +1,37 @@
+{
+  "meta/llama-3.1-70b-instruct": {
+    "avg_time": 0,
+    "success_rate": 0,
+    "attempts": 0
+  },
+  "bytedance/seed-oss-36b-instruct": {
+    "avg_time": 0,
+    "success_rate": 0,
+    "attempts": 0
+  },
+  "meta/llama-3.1-8b-instruct": {
+    "avg_time": 0,
+    "success_rate": 0,
+    "attempts": 0
+  },
+  "abacusai/dracarys-llama-3.1-70b-instruct": {
+    "avg_time": 30.765962719917297,
+    "success_rate": 0.0,
+    "attempts": 2
+  },
+  "mistralai/mixtral-8x7b-instruct": {
+    "avg_time": 0,
+    "success_rate": 0,
+    "attempts": 0
+  },
+  "01-ai/yi-large": {
+    "avg_time": 0,
+    "success_rate": 0,
+    "attempts": 0
+  },
+  "aisingapore/sea-lion-7b-instruct": {
+    "avg_time": 0,
+    "success_rate": 0,
+    "attempts": 0
+  }
+}

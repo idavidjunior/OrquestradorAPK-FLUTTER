@@ -30,6 +30,7 @@ from orchestrator.timeout_manager import AdaptiveTimeoutManager
 from orchestrator.ia_response_validator import IAResponseValidator
 from orchestrator.model_manager import IntelligentModelManager
 from orchestrator.kotlin_fixer import KotlinGradleFixer
+from orchestrator.knowledge_base_learner import KnowledgeBaseLearner
 
 try:
     import yaml
@@ -656,6 +657,16 @@ class FlutterBuildOrchestrator:
                     fix_result = kgp_fixer.apply_fixes()
                     if fix_result['success']:
                         self.log(f"KotlinGradleFixer: {len(fix_result['fixes_applied'])} correcoes aplicadas", "SUCCESS")
+                        try:
+                            kb_learner = KnowledgeBaseLearner()
+                            kb_learner.learn_from_build(
+                                build_log=stderr, error=stderr,
+                                solution="KotlinGradleFixer: remove .kts + recria build.gradle",
+                                success=True
+                            )
+                            self.log("[KB] Solucao Kotlin registrada na KnowledgeBase.", "SUCCESS")
+                        except Exception as kbe:
+                            self.log(f"[KB] Erro ao registrar: {kbe}", "DEBUG")
                 except Exception as kgp_e:
                     self.log(f"KotlinGradleFixer: {kgp_e}", "WARNING")
                 return self.build_apk(release, build_number,
@@ -1432,7 +1443,23 @@ class FlutterBuildOrchestrator:
             if content:
                 files[key] = content
 
-        # Tenta corrigir via KnowledgeBase (erros estruturais, namespace, etc.)
+        # Antes de chamar IA: verifica KnowledgeBaseLearner (pacote orchestrator)
+        try:
+            kb_learner = KnowledgeBaseLearner()
+            solution, confidence = kb_learner.get_solution(errors)
+            if solution and confidence > 0.8:
+                self.log(f"[KB] Solucao de alta confianca ({confidence:.0%}) na KnowledgeBase, aplicando.", "INFO")
+                if "build.gradle.kts" in solution or "Kotlin" in solution:
+                    kts = self.project_path / "android" / "app" / "build.gradle.kts"
+                    if kts.exists():
+                        kts.unlink()
+                        self.log("[KB] build.gradle.kts removido (solucao KB)", "SUCCESS")
+            if solution and confidence > 0.5:
+                self.log(f"[KB] Solucao via IA da KB (confianca: {confidence:.0%})", "INFO")
+        except Exception as kb_e:
+            self.log(f"[KB] Erro ao consultar KnowledgeBaseLearner: {kb_e}", "DEBUG")
+
+        # Tenta corrigir via KnowledgeBase GUI (erros estruturais, namespace, etc.)
         try:
             from gui.knowledge_base import KnowledgeBase
             kb = KnowledgeBase(self._LogAdapter(self.log))
@@ -1497,7 +1524,7 @@ class FlutterBuildOrchestrator:
         self._consecutive_401 = 0
 
         accumulated_errors = errors
-        max_retries = 3
+        max_retries = 2
         for attempt in range(1, max_retries + 1):
             if attempt > 1 and self._cancelled:
                 self.log("Corre\u00e7\u00e3o cancelada pelo usu\u00e1rio", "WARNING")
@@ -1785,7 +1812,7 @@ class FlutterBuildOrchestrator:
                 })
                 req = Request(url, data=payload.encode(),
                               headers={"Content-Type": "application/json"})
-                with urlopen(req, timeout=60) as r:
+                with urlopen(req, timeout=300) as r:
                     resp = json.loads(r.read())
                 text = (resp.get("candidates", [{}])[0]
                         .get("content", {})
@@ -1804,7 +1831,7 @@ class FlutterBuildOrchestrator:
                                   "x-api-key": self.api_key,
                                   "anthropic-version": "2023-06-01",
                               })
-                with urlopen(req, timeout=60) as r:
+                with urlopen(req, timeout=300) as r:
                     resp = json.loads(r.read())
                 text = (resp.get("content", [{}])[0]
                         .get("text", ""))
@@ -1821,7 +1848,7 @@ class FlutterBuildOrchestrator:
                                   "Content-Type": "application/json",
                                   "Authorization": f"Bearer {self.api_key}",
                               })
-                with urlopen(req, timeout=60) as r:
+                with urlopen(req, timeout=300) as r:
                     resp = json.loads(r.read())
                 text = (resp.get("choices", [{}])[0]
                         .get("message", {})

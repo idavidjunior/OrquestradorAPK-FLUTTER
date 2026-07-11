@@ -203,7 +203,49 @@
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T17:10:16.600547",
+      "success": false,
+      "response_time": 30.486947059631348,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T17:21:30.792564",
+      "success": false,
+      "response_time": 31.044978380203247,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T17:21:51.475040",
+      "success": true,
+      "response_time": 19.68588900566101,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T17:21:55.674434",
+      "success": true,
+      "response_time": 4.021773815155029,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T17:40:45.869517",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T17:40:45.913614",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
     }
   ],
-  "last_update": "2026-07-11T17:00:45.113952"
+  "last_update": "2026-07-11T17:40:45.914595"
 }
