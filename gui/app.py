@@ -1192,6 +1192,30 @@ def run():
                 f"Chave salva para {self.api_provider} "
                 f"(termina em ...{key[-4:]})"
             )
+            self._update_ai_status("testing", "Validando chave salva...")
+            threading.Thread(
+                target=self._do_validate_saved_key,
+                args=(key,), daemon=True
+            ).start()
+
+        def _do_validate_saved_key(self, key: str):
+            provider = self.api_provider
+            self._update_ai_status("testing", f"Validando chave {provider}...")
+            working = self._auto_select_model(provider, key, force=True)
+            if working:
+                self._update_ai_status(
+                    "connected",
+                    f"{provider}/{working} OK"
+                )
+                self.after(0, lambda: self.log.ok(
+                    "Chave validada automaticamente ap\u00f3s salvar"
+                ))
+            else:
+                self._update_ai_status("error", f"{provider}: chave inv\u00e1lida")
+                self.after(0, lambda: self.log.err(
+                    "Chave n\u00e3o funciona — clique no link 'Obter chave' "
+                    "para gerar uma nova"
+                ))
 
         def _open_provider_key_url(self):
             provider = self.api_provider

@@ -813,7 +813,8 @@ class FlutterBuildOrchestrator:
     # ── AI auto-correction ────────────────────────────────────────────
 
     def _ai_fix_code(self, errors: str, code: str,
-                      extra_files: Optional[dict] = None) -> Optional[str]:
+                      extra_files: Optional[dict] = None,
+                      _retry_count: int = 0) -> Optional[str]:
         """Chama a API de IA para corrigir o c\u00f3digo com base nos erros."""
         if not self.api_key or not self.api_provider:
             return None
@@ -831,26 +832,56 @@ class FlutterBuildOrchestrator:
                 if name != "main.dart" and content:
                     extra += f"\nARQUIVO ({name}):\n```\n{content[:1500]}\n```\n"
 
+        kb_hints = ""
+        try:
+            from gui.knowledge_base import KnowledgeBase
+            kb_log = type('_', (), {'ok': lambda s: None, 'warn': lambda s: None,
+                                     'err': lambda s: None, 'info': lambda s: None})()
+            kb = KnowledgeBase(kb_log)
+            kb_fixes = kb._db.get("fixes", [])
+            if kb_fixes:
+                categories = {}
+                for f in kb_fixes:
+                    cat = f.get("type", "generic")
+                    desc = f.get("description", "")
+                    pats = f.get("error_patterns", [])
+                    if cat not in categories:
+                        categories[cat] = []
+                    categories[cat].append({"desc": desc, "pats": pats[:3]})
+                kb_hints = "\nPADR\u00d5ES DE ERRO CONHECIDOS (KnowledgeBase):\n"
+                for cat, items in categories.items():
+                    kb_hints += f"\n  [{cat}]\n"
+                    for item in items[:5]:
+                        kb_hints += f"    - {item['desc']}\n"
+                        for p in item['pats'][:2]:
+                            kb_hints += f"      padr\u00e3o: {p[:100]}\n"
+        except Exception:
+            pass
+
         prompt = (
-            "Voc\u00ea \u00e9 um especialista em Flutter/Dart/Android.\n"
-            "O projeto abaixo falhou ao compilar com os erros listados.\n\n"
+            "Voc\u00ea \u00e9 um especialista s\u00eanior em Flutter/Dart/Android/Kotlin/Gradle.\n"
+            "Seu objetivo \u00e9 corrigir o c\u00f3digo abaixo para que ele compile em APK.\n\n"
             f"ERROS DO COMPILADOR:\n{errors[:3000]}\n\n"
             "C\u00d3DIGO DART (main.dart):\n"
             f"```dart\n{code[:4000]}\n```\n"
             f"{extra}\n"
+            f"{kb_hints}\n"
             "TAREFA:\n"
-            "1. Analise cada erro e corrija o c\u00f3digo necess\u00e1rio\n"
-            "2. Mantenha a l\u00f3gica e funcionalidade originais\n"
-            "3. Corrija apenas o necess\u00e1rio para compilar\n"
-            "4. Se o erro for em AndroidManifest.xml ou build.gradle,"
-            " corrija esses arquivos tamb\u00e9m\n"
-            "5. Retorne APENAS o conte\u00fado corrigido do(s) arquivo(s),"
+            "1. Analise CADA erro individualmente e corrija a causa raiz\n"
+            "2. Mantenha a l\u00f3gica e funcionalidade originais do app\n"
+            "3. Corrija APENAS o necess\u00e1rio para compilar sem erros\n"
+            "4. Se o erro for em AndroidManifest.xml, build.gradle, "
+            "settings.gradle ou pubspec.yaml, corrija esses arquivos tamb\u00e9m\n"
+            "5. Verifique imports ausentes, tipos incorretos, sintaxe Dart/XML/Gradle inv\u00e1lida\n"
+            "6. Retorne APENAS o conte\u00fado corrigido do(s) arquivo(s),"
             " no formato:\n"
             "   ARQUIVO: caminho/relativo\n"
             "   ```\n"
             "   conte\u00fado corrigido\n"
             "   ```\n"
-            "6. Mantenha arquivos sem erros inalterados\n"
+            "7. Mantenha arquivos sem erros inalterados — n\u00e3o os inclua na resposta\n"
+            "8. Se for adicionar depend\u00eancia no pubspec.yaml, "
+            "use a sintaxe correta: nome: ^vers\u00e3o\n"
             "IMPORTANTE: Inclua APENAS arquivos que precisam de corre\u00e7\u00e3o."
         )
 
@@ -1043,9 +1074,26 @@ class FlutterBuildOrchestrator:
             return None
         except URLError as e:
             _elapsed = _time.time() - _t0
+            reason = str(e.reason)[:200] if hasattr(e, 'reason') and e.reason else str(e)[:200]
+            if _retry_count < 3:
+                wait = (_retry_count + 1) * 2
+                self.log(
+                    f"[IA] \u2716 Erro de conex\u00e3o (tentativa {_retry_count + 1}/3): "
+                    f"{reason} — re-tentando em {wait}s...",
+                    "WARNING"
+                )
+                _time.sleep(wait)
+                return self._ai_fix_code(errors, code, extra_files,
+                                         _retry_count=_retry_count + 1)
             self.log(
-                f"[IA] \u2716 Erro de conex\u00e3o ({_elapsed:.1f}s): {e.reason[:100]}",
+                f"[IA] \u2716 Conex\u00e3o falhou ap\u00f3s 3 tentativas: {reason}",
                 "ERROR"
+            )
+            self.log(
+                "[IA] Verifique sua conex\u00e3o de internet. "
+                "Se o problema persistir, clique em 'Salvar Chave' "
+                "para re-validar a chave de API.",
+                "INFO"
             )
         except Exception as e:
             _elapsed = _time.time() - _t0
@@ -1342,6 +1390,121 @@ class FlutterBuildOrchestrator:
         except Exception as e:
             self.log(f"Erro ao salvar aprendizado: {e}", "WARNING")
 
+    def _ai_self_review(self) -> bool:
+        """IA revisa o pr\u00f3prio c\u00f3digo do Orchestrator e aplica corre\u00e7\u00f5es se necess\u00e1rio."""
+        if not self.api_key:
+            return True
+        orc_path = Path(__file__)
+        code = orc_path.read_text(encoding="utf-8")
+        if len(code) < 100:
+            return True
+        cfg = self.AI_PROVIDER_CONFIG.get(self.api_provider)
+        if not cfg:
+            return True
+        model = self.api_model or cfg["model"]
+        prompt = (
+            "Voc\u00ea \u00e9 um revisor de c\u00f3digo Python. Analise o arquivo abaixo "
+            "(FlutterBuildOrchestrator) e identifique:\n"
+            "1. Bugs que podem impedir o build de APK\n"
+            "2. Melhorias que aumentam a taxa de sucesso na compila\u00e7\u00e3o\n"
+            "3. Trechos que podem causar crash (ex: None sem check, timeout curto)\n\n"
+            f"C\u00d3DIGO:\n```python\n{code[:5000]}\n```\n\n"
+            "Se encontrar algo cr\u00edtico, retorne o c\u00f3digo corrigido COMPLETO "
+            "do(s) m\u00e9todo(s) afetado(s) no formato:\n"
+            "   ARQUIVO: flutter_orchestrator.py\n"
+            "   ```\n"
+            "   c\u00f3digo corrigido (apenas os m\u00e9todos que mudaram)\n"
+            "   ```\n"
+            "Se tudo estiver OK, retorne apenas: \"OK\""
+        )
+        try:
+            if cfg["type"] == "gemini":
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/"
+                    f"models/{model}:generateContent"
+                    f"?key={self.api_key}"
+                )
+                payload = json.dumps({
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.05, "maxOutputTokens": 4096},
+                })
+                req = Request(url, data=payload.encode(),
+                              headers={"Content-Type": "application/json"})
+                with urlopen(req, timeout=60) as r:
+                    resp = json.loads(r.read())
+                text = (resp.get("candidates", [{}])[0]
+                        .get("content", {})
+                        .get("parts", [{}])[0]
+                        .get("text", ""))
+            elif cfg["type"] == "anthropic":
+                url = "https://api.anthropic.com/v1/messages"
+                payload = json.dumps({
+                    "model": model,
+                    "max_tokens": 4096,
+                    "messages": [{"role": "user", "content": prompt}],
+                })
+                req = Request(url, data=payload.encode(), method="POST",
+                              headers={
+                                  "Content-Type": "application/json",
+                                  "x-api-key": self.api_key,
+                                  "anthropic-version": "2023-06-01",
+                              })
+                with urlopen(req, timeout=60) as r:
+                    resp = json.loads(r.read())
+                text = (resp.get("content", [{}])[0]
+                        .get("text", ""))
+            else:
+                url = f"{cfg['url'].rstrip('/')}/chat/completions"
+                payload = json.dumps({
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.05,
+                    "max_tokens": 4096,
+                })
+                req = Request(url, data=payload.encode(), method="POST",
+                              headers={
+                                  "Content-Type": "application/json",
+                                  "Authorization": f"Bearer {self.api_key}",
+                              })
+                with urlopen(req, timeout=60) as r:
+                    resp = json.loads(r.read())
+                text = (resp.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", ""))
+            if not text or text.strip() == "OK":
+                return True
+            file_fixes = {}
+            current_file = None
+            current_content = []
+            in_block = False
+            for line in text.split("\n"):
+                m = re.match(r"^ARQUIVO:\s*(.+)$", line)
+                if m:
+                    if current_file and current_content:
+                        file_fixes[current_file] = "\n".join(current_content)
+                    current_file = m.group(1).strip()
+                    current_content = []
+                    in_block = False
+                elif line.strip().startswith("```"):
+                    in_block = not in_block
+                elif current_file is not None and not in_block:
+                    current_content.append(line)
+            if current_file and current_content:
+                file_fixes[current_file] = "\n".join(current_content)
+            if file_fixes:
+                for rel_path, content in file_fixes.items():
+                    abs_path = Path(__file__).resolve().parent / rel_path
+                    if abs_path.exists():
+                        bak = abs_path.with_suffix(".py.bak")
+                        if not bak.exists():
+                            abs_path.rename(bak)
+                        abs_path.write_text(content.strip() + "\n", encoding="utf-8")
+                        self.log(f"Orchestrator auto-corrigido: {rel_path}", "SUCCESS")
+            return True
+        except Exception as e:
+            self.log(f"Auto-revis\u00e3o: {e}", "WARNING")
+            return True
+
     # ── Pipeline ───────────────────────────────────────────────────────
 
     def orchestrate(self, skip_tests: bool = False, debug: bool = False,
@@ -1354,6 +1517,7 @@ class FlutterBuildOrchestrator:
         self.log(f"Output: {self.output_dir}", "INFO")
 
         steps = [
+            ("Auto-revisão do Orchestrator", lambda: self._ai_self_review()),
             ("Pré-requisitos", lambda: self.check_prerequisites()),
             ("Validação", lambda: self.validate_flutter_project()),
             ("Dependências", lambda: self.get_dependencies()),
