@@ -1923,9 +1923,9 @@ class FlutterBuildOrchestrator:
         self.log(f"Output: {self.output_dir}", "INFO")
 
         steps = [
-            ("Auto-revisão do Orchestrator", lambda: self._ai_self_review()),
             ("Pré-requisitos", lambda: self.check_prerequisites()),
             ("Validação", lambda: self.validate_flutter_project()),
+            ("Auto-revisão do Orchestrator", lambda: self._ai_self_review()),
             ("Dependências", lambda: self.get_dependencies()),
             ("Correção pré-build",
              lambda: self._apply_pre_build_fixes()),

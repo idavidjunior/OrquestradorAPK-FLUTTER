@@ -1009,6 +1009,10 @@ def run():
             if not self.api_key:
                 self.after(60000, self._schedule_ai_health_check)
                 return
+            # Durante o build, pula health-check para evitar timeout no meio da compilacao
+            if getattr(self, "build_running", False):
+                self.after(300000, self._schedule_ai_health_check)
+                return
             provider = self.api_provider
             model = self._auto_selected_models.get(provider, "")
             if not model:
@@ -1040,7 +1044,7 @@ def run():
                 self._model_fallback_cache[provider] = fallback_models
             current = self._auto_selected_models.get(provider, "")
             candidates = [m for m in fallback_models if m != current]
-            for mid in candidates[:5]:
+            for mid in candidates[:2]:
                 self._update_ai_status("testing", f"Testando fallback: {mid}...")
                 ok = self._test_chat_model(provider, self.api_key, mid)
                 if ok:
@@ -1067,7 +1071,7 @@ def run():
                 fresh = self._list_models_for_provider(provider, self.api_key)
                 if fresh:
                     self._model_fallback_cache[provider] = fresh
-                    for mid in fresh[:10]:
+                    for mid in fresh[:3]:
                         if mid == current:
                             continue
                         self._update_ai_status("testing", f"Testando: {mid}...")
