@@ -2,41 +2,6 @@
   "base_timeout": 30,
   "history": [
     {
-      "timestamp": "2026-07-11T10:10:00.792254",
-      "success": true,
-      "response_time": 5.0,
-      "model": "test-model",
-      "tier": "fast"
-    },
-    {
-      "timestamp": "2026-07-11T10:10:32.568007",
-      "success": true,
-      "response_time": 5.0,
-      "model": "test-model",
-      "tier": "fast"
-    },
-    {
-      "timestamp": "2026-07-11T10:10:42.849864",
-      "success": true,
-      "response_time": 5.0,
-      "model": "test-model",
-      "tier": "fast"
-    },
-    {
-      "timestamp": "2026-07-11T10:10:42.888077",
-      "success": true,
-      "response_time": 5.0,
-      "model": "test-model",
-      "tier": "fast"
-    },
-    {
-      "timestamp": "2026-07-11T10:11:02.476887",
-      "success": true,
-      "response_time": 5.0,
-      "model": "test-model",
-      "tier": "fast"
-    },
-    {
       "timestamp": "2026-07-11T10:11:02.505700",
       "success": true,
       "response_time": 5.0,
@@ -350,7 +315,42 @@
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T20:10:23.303840",
+      "success": false,
+      "response_time": 30.463161945343018,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T20:13:11.756738",
+      "success": false,
+      "response_time": 30.35123038291931,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T20:13:42.272133",
+      "success": false,
+      "response_time": 30.409558057785034,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T20:27:26.907303",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T20:27:26.940755",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
     }
   ],
-  "last_update": "2026-07-11T20:05:21.310131"
+  "last_update": "2026-07-11T20:27:26.940755"
 }

@@ -682,6 +682,20 @@ class FlutterBuildOrchestrator:
                 return self.build_apk(release, build_number,
                                       _skip_gradle_check=True)
 
+            # Correcao estrutural para 'unsupported Gradle project'
+            if "unsupported Gradle" in stderr or "Gradle project" in stderr:
+                self.log("Estrutura Gradle corrompida, recriando android/ do zero...", "WARNING")
+                from consolidate_build_pipeline import BuildFixer
+                struct_fixer = BuildFixer(str(self.project_path))
+                if struct_fixer.apply_fix("fix_unsupported_gradle"):
+                    self.log("Estrutura android recriada, retentando build...", "SUCCESS")
+                    try:
+                        from orchestrator.knowledge_base_learner import KnowledgeBaseLearner
+                        KnowledgeBaseLearner().learn_from_build(stderr, stderr, "fix_unsupported_gradle", True)
+                    except Exception:
+                        pass
+                    return self.build_apk(release, build_number, _skip_gradle_check)
+
             # Tenta corre\u00e7\u00e3o via IA se configurada
             if self.api_key and self.api_provider:
                 self.log("Tentando corre\u00e7\u00e3o autom\u00e1tica via IA...", "INFO")

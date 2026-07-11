@@ -1649,6 +1649,18 @@
       "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
       "times_applied": 0,
       "source": "failed_attempt"
+    },
+    {
+      "id": "failed_9bc0dc5c",
+      "description": "Falha não resolvida: [!] Your app is using an unsupported Gradle project. To fix this problem, create a new project by ru...",
+      "error_patterns": [
+        "[!] Your app is using an unsupported Gradle project. To fix this problem, create a new project by running `flutter create -t app <app-directory>` and then move the dart code, assets and pubspec.yaml t"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
     }
   ],
   "package_versions": {

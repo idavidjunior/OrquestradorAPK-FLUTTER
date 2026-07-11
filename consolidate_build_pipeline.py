@@ -420,6 +420,118 @@ dependencies {
         self.fixes_applied.append("detect_and_fix_gradle")
         return True
 
+    def fix_unsupported_gradle(self):
+        """Recria estrutura android do zero para erro 'unsupported Gradle project'."""
+        backup = self.project_path / ".backup_android"
+        try:
+            # Backup
+            backup.mkdir(exist_ok=True)
+            main_dart = self.project_path / "lib" / "main.dart"
+            if main_dart.exists():
+                shutil.copy2(main_dart, backup / "main.dart")
+            pubspec = self.project_path / "pubspec.yaml"
+            if pubspec.exists():
+                shutil.copy2(pubspec, backup / "pubspec.yaml")
+            # Remove android/
+            android_dir = self.project_path / "android"
+            if android_dir.exists():
+                shutil.rmtree(android_dir, ignore_errors=True)
+            # Tenta flutter create
+            try:
+                subprocess.run(["flutter", "create", "."], cwd=self.project_path,
+                               capture_output=True, text=True, timeout=60)
+            except Exception:
+                pass
+            # Se a pasta android ainda nao existe ou esta vazia, cria manual
+            if not (self.project_path / "android" / "app" / "build.gradle").exists():
+                self._create_manual_android()
+            # Restaura codigo
+            if (backup / "main.dart").exists():
+                lib = self.project_path / "lib"
+                lib.mkdir(exist_ok=True)
+                shutil.copy2(backup / "main.dart", lib / "main.dart")
+            if (backup / "pubspec.yaml").exists():
+                shutil.copy2(backup / "pubspec.yaml", self.project_path / "pubspec.yaml")
+            shutil.rmtree(backup, ignore_errors=True)
+            subprocess.run(["flutter", "clean"], cwd=self.project_path, capture_output=True)
+            subprocess.run(["flutter", "pub", "get"], cwd=self.project_path, capture_output=True)
+            self.fixes_applied.append("fix_unsupported_gradle")
+            return True
+        except Exception:
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            return False
+
+    def _create_manual_android(self):
+        """Cria estrutura android manual (fallback se flutter create falhar)."""
+        android = self.project_path / "android"
+        app = android / "app"
+        src = app / "src" / "main"
+        src.mkdir(parents=True, exist_ok=True)
+        (src / "AndroidManifest.xml").write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n'
+            '    package="com.example.app">\n'
+            '    <application android:label="app" android:name="${applicationName}"\n'
+            '        android:icon="@mipmap/ic_launcher">\n'
+            '        <activity android:name=".MainActivity" android:exported="true"\n'
+            '            android:launchMode="singleTop"\n'
+            '            android:theme="@style/LaunchTheme"\n'
+            '            android:configChanges="orientation|keyboardHidden|keyboard|'
+            'screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|'
+            'density|uiMode"\n'
+            '            android:hardwareAccelerated="true"\n'
+            '            android:windowSoftInputMode="adjustResize">\n'
+            '            <meta-data android:name="io.flutter.embedding.android.NormalTheme"\n'
+            '                android:resource="@style/NormalTheme"/>\n'
+            '            <intent-filter>\n'
+            '                <action android:name="android.intent.action.MAIN"/>\n'
+            '                <category android:name="android.intent.category.LAUNCHER"/>\n'
+            '            </intent-filter>\n'
+            '        </activity>\n'
+            '        <meta-data android:name="flutterEmbedding" android:value="2" />\n'
+            '    </application>\n'
+            '</manifest>\n', encoding='utf-8')
+        (app / "build.gradle").write_text(
+            'plugins {\n    id "com.android.application"\n    id "kotlin-android"\n}\n'
+            'android {\n    compileSdkVersion 34\n'
+            '    namespace "com.example.app"\n'
+            '    compileOptions {\n'
+            '        sourceCompatibility JavaVersion.VERSION_17\n'
+            '        targetCompatibility JavaVersion.VERSION_17\n    }\n'
+            '    kotlinOptions { jvmTarget = "17" }\n'
+            '    defaultConfig {\n'
+            '        applicationId "com.example.app"\n'
+            '        minSdkVersion 21\n        targetSdkVersion 34\n'
+            '        versionCode 1\n        versionName "1.0"\n    }\n'
+            '    buildTypes {\n        release {\n'
+            '            minifyEnabled false\n'
+            '            proguardFiles getDefaultProguardFile("proguard-android.txt"),'
+            ' "proguard-rules.pro"\n        }\n    }\n}\n'
+            'dependencies {\n'
+            '    implementation "androidx.core:core-ktx:1.12.0"\n'
+            '    implementation "androidx.appcompat:appcompat:1.6.1"\n}\n', encoding='utf-8')
+        (android / "build.gradle").write_text(
+            'buildscript {\n    ext.kotlin_version = "1.9.22"\n'
+            '    repositories { google(); mavenCentral() }\n'
+            '    dependencies {\n'
+            '        classpath "com.android.tools.build:gradle:7.4.2"\n'
+            '        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"\n'
+            '    }\n}\n'
+            'allprojects {\n    repositories { google(); mavenCentral() }\n}\n'
+            'rootProject.buildDir = "../build"\n'
+            'subprojects {\n'
+            '    project.buildDir = "${rootProject.buildDir}/${project.name}"\n}\n'
+            'subprojects {\n    project.evaluationDependsOn(":app")\n}\n'
+            'tasks.register("clean", Delete) {\n    delete rootProject.buildDir\n}\n',
+            encoding='utf-8')
+        (android / "settings.gradle").write_text("include ':app'\n", encoding='utf-8')
+        (android / "gradle.properties").write_text(
+            "android.useAndroidX=true\nandroid.enableJetifier=true\n"
+            "org.gradle.jvmargs=-Xmx4G\n", encoding='utf-8')
+        sdk = os.environ.get('FLUTTER_ROOT') or "C:\\Users\\Playtec-bancada\\flutter"
+        (android / "local.properties").write_text(f"flutter.sdk={sdk}\n", encoding='utf-8')
+
     FIX_ACTIONS = {
         "ensure_pubspec_dependencies": ensure_pubspec_dependencies,
         "regenerate_android_properties": regenerate_android_properties,
@@ -433,6 +545,7 @@ dependencies {
         "zipalign_apk": zipalign_apk,
         "remove_kts_before_build": remove_kts_before_build,
         "detect_and_fix_gradle": detect_and_fix_gradle,
+        "fix_unsupported_gradle": fix_unsupported_gradle,
     }
 
     def apply_fix(self, action_name):

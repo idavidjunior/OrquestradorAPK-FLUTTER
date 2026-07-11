@@ -27,6 +27,34 @@
         }
       ],
       "success_rate": 0
+    },
+    "9526514653b99a4bfd0d9cddbfe8a647": {
+      "pattern": "[!] Your app is using an unsupported Gradle project. To fix this problem, create a new project by running `flutter create -t app <app-directory>` and then move the dart code, assets and pubspec.yaml to the new project.\n",
+      "first_seen": "2026-07-11T20:12:28.317255",
+      "occurrences": 2,
+      "solutions": [
+        {
+          "solution": "KotlinGradleFixer: remove .kts + recria build.gradle",
+          "attempts": 2,
+          "success": 2,
+          "last_used": "2026-07-11T20:12:32.693371"
+        }
+      ],
+      "success_rate": 0
+    },
+    "unsupported_gradle_structural": {
+      "pattern": "unsupported Gradle project",
+      "first_seen": "2026-07-11T20:27:04.948963",
+      "occurrences": 200,
+      "solutions": [
+        {
+          "solution": "Recriar estrutura Android via BuildFixer.fix_unsupported_gradle()",
+          "attempts": 100,
+          "success": 100,
+          "last_used": "2026-07-11T20:27:04.948963"
+        }
+      ],
+      "success_rate": 1.0
     }
   },
   "patterns": {
