@@ -352,7 +352,26 @@ IMPORTANTE: Sua resposta ser[aá] validada automaticamente. Se n[aã]o for c[oó
 """
 
     async def _call_ia_model(self, model: str, prompt: str) -> Optional[str]:
-        return None
+        self._log("[IA-FALLBACK] Chamando modelo IA...")
+        try:
+            import aiohttp
+            api_key = os.environ.get("NVIDIA_API_KEY") or os.environ.get("API_KEY") or ""
+            url = f"https://integrate.api.nvidia.com/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 4096}
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers, timeout=120) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if text and len(text.strip()) >= 200:
+                            return text
+                    self._log(f"[IA-FALLBACK] HTTP {resp.status} ou resposta curta")
+                    return None
+        except Exception as e:
+            self._log(f"[IA-FALLBACK] Erro: {e}")
+            return None
+
 
     async def _apply_fix(self, fix: str):
         target_file = self.project_path / 'lib' / 'main.dart'

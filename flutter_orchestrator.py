@@ -900,6 +900,29 @@ class FlutterBuildOrchestrator:
 
     # ── AI auto-correction ────────────────────────────────────────────
 
+    
+    def _validate_ia_response(self, response_text: str) -> Optional[dict]:
+        if not response_text or len(response_text.strip()) < 200:
+            self.log("[IA] Resposta muito curta (<200 chars), invalida", "WARNING")
+            return None
+        try:
+            data = json.loads(response_text)
+        except (json.JSONDecodeError, TypeError):
+            self.log("[IA] Resposta nao e JSON valido", "WARNING")
+            return None
+        if not isinstance(data, dict):
+            return None
+        if data.get("ok"):
+            return data
+        files = data.get("files", {})
+        if not isinstance(files, dict) or not files:
+            self.log("[IA] JSON nao contem 'files' valido", "WARNING")
+            return None
+        for fpath, fcontent in files.items():
+            if not isinstance(fcontent, str) or len(fcontent.strip()) < 50:
+                return None
+        return data
+
     def _ai_fix_code(self, errors: str, code: str,
                       extra_files: Optional[dict] = None,
                       _retry_count: int = 0,
@@ -1142,7 +1165,7 @@ class FlutterBuildOrchestrator:
             if json_str.startswith("json"):
                 json_str = json_str[4:].strip()
             try:
-                parsed = json.loads(json_str)
+                parsed = self._validate_ia_response(json_str) or {}
                 if isinstance(parsed, dict):
                     if parsed.get("ok"):
                         self.log("[IA] IA indicou que n\u00e3o h\u00e1 o que corrigir", "INFO")
