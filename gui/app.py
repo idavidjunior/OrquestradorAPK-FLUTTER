@@ -125,6 +125,7 @@ def run():
             self._custom_providers = {}
             self._auto_validate_after_id = None
             self._auto_selected_models = {}
+            self._model_fallback_cache = {}
             self._ollama_models_cache = []
             self._bad_models = set()
 
@@ -991,7 +992,50 @@ def run():
                 detail = "Health-check " + ("OK" if ok else "FALHOU") + f" | {provider}/{model} | {elapsed:.0f}ms"
                 self._update_ai_status("connected" if ok else "error", detail)
                 self._health_prev_ok = ok
+                if not ok:
+                    self.log.info(
+                        f"Modelo {model} falhou — procurando alternativa..."
+                    )
+                    threading.Thread(
+                        target=self._do_recover_model,
+                        args=(provider,), daemon=True
+                    ).start()
             self.after(60000, self._schedule_ai_health_check)
+
+        def _do_recover_model(self, provider: str):
+            fallback_models = self._model_fallback_cache.get(provider, [])
+            if not fallback_models:
+                fallback_models = self._list_models_for_provider(provider, self.api_key)
+                self._model_fallback_cache[provider] = fallback_models
+            current = self._auto_selected_models.get(provider, "")
+            candidates = [m for m in fallback_models if m != current]
+            for mid in candidates[:5]:
+                self._update_ai_status("testing", f"Testando fallback: {mid}...")
+                ok = self._test_chat_model(provider, self.api_key, mid)
+                if ok:
+                    self._auto_selected_models[provider] = mid
+                    if provider in self.OPENAI_COMPATIBLE:
+                        self.OPENAI_COMPATIBLE[provider] = (
+                            self.OPENAI_COMPATIBLE[provider][0], mid
+                        )
+                    elif provider in self._custom_providers:
+                        self._custom_providers[provider]["model"] = mid
+                    self._update_ai_status(
+                        "connected",
+                        f"Fallback \u2192 {provider}/{mid} OK"
+                    )
+                    self.log.ok(
+                        f"Modelo recuperado automaticamente: {mid}"
+                    )
+                    return
+            self._update_ai_status(
+                "error",
+                f"{provider}: nenhum modelo alternativo funcional"
+            )
+            self.log.warn(
+                "Nenhum modelo funcional encontrado — "
+                "clique em 'Salvar Chave' para re-validar ou obtenha uma nova chave"
+            )
 
         def _auto_validate_on_startup(self):
             if not self.api_key:
@@ -1018,6 +1062,10 @@ def run():
                     "error",
                     f"{provider}: nenhum modelo funcional encontrado"
                 )
+                self.after(0, lambda: self.log.warn(
+                    "Nenhum modelo funcional — clique em 'Salvar Chave' "
+                    "para re-validar ou obtenha uma nova chave de API"
+                ))
             self.after(60000, self._schedule_ai_health_check)
 
         def _add_custom_provider(self):
@@ -1476,6 +1524,7 @@ def run():
             self._update_ai_status(
                 "testing", f"{provider}: {len(models)} modelos disponíveis"
             )
+            self._model_fallback_cache[provider] = models
 
             skip_keywords = ["embedding", "tts", "whisper", "davinci",
                              "babbage", "curie", "ada", "moderation",

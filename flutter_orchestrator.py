@@ -1039,7 +1039,8 @@ class FlutterBuildOrchestrator:
                 f"{': ' + reason if reason else ''}",
                 "ERROR"
             )
-            if http_code in (401, 402, 403):
+            needs_fallback = http_code in (401, 402, 403, 429) or http_code >= 500
+            if needs_fallback:
                 if http_code == 401:
                     cur = self.api_provider or "NVIDIA"
                     if cur == self._last_401_provider:
