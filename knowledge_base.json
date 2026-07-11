@@ -1,0 +1,26 @@
+{
+  "errors": {
+    "kotlin_kgp_fix": {
+      "pattern": "Kotlin Gradle Plugin (KGP): on_audio_query_android",
+      "first_seen": "2026-07-11T10:47:10.236477",
+      "occurrences": 5,
+      "solutions": [
+        {
+          "solution": "Remover build.gradle.kts e usar build.gradle com compileSdk 34 e kotlin 1.9.22",
+          "attempts": 3,
+          "success": 3,
+          "last_used": "2026-07-11T10:47:10.236477"
+        }
+      ],
+      "success_rate": 1.0
+    }
+  },
+  "patterns": {},
+  "solutions": {},
+  "stats": {
+    "total_errors": 1,
+    "solved_errors": 1,
+    "learning_rate": 1.0
+  },
+  "learned_patterns": []
+}

@@ -23,13 +23,18 @@ def backup_file(path):
         log(f"Backup de {path.name} criado")
 
 def apply_kotlin_fix():
-    log("🔧 Aplicando correção Kotlin/Gradle definitiva...")
+    log("[FIX] Aplicando correcao Kotlin/Gradle definitiva...")
     android_dir = PROJECT_ROOT / "android"
+    if not android_dir.exists():
+        log("[WARN] Diretorio android/ nao encontrado (este nao e um projeto Flutter direto). Pulando...")
+        return True
     app_dir = android_dir / "app"
+    if not app_dir.exists():
+        app_dir.mkdir(parents=True, exist_ok=True)
     kts = app_dir / "build.gradle.kts"
     if kts.exists():
         kts.unlink()
-        log("✅ build.gradle.kts removido")
+        log("[OK] build.gradle.kts removido")
     gradle = app_dir / "build.gradle"
     backup_file(gradle)
     with open(gradle, "w", encoding="utf-8") as f:
@@ -52,7 +57,7 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
 }
 """)
-    log("✅ build.gradle recriado")
+    log("[OK] build.gradle recriado")
     project_gradle = android_dir / "build.gradle"
     backup_file(project_gradle)
     with open(project_gradle, "r", encoding="utf-8") as f:
@@ -62,14 +67,14 @@ dependencies {
         content = content.replace("dependencies {", "dependencies {\n        classpath \"org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version\"")
     with open(project_gradle, "w", encoding="utf-8") as f:
         f.write(content)
-    log("✅ project build.gradle atualizado")
+    log("[OK] project build.gradle atualizado")
     return True
 
 def fix_model_manager():
-    log("🤖 Ajustando ModelManager para priorizar meta/llama-3.1-70b-instruct...")
+    log("[AI] Ajustando ModelManager para priorizar meta/llama-3.1-70b-instruct...")
     mm_path = ORCHESTRATOR_DIR / "model_manager.py"
     if not mm_path.exists():
-        log("⚠️ model_manager.py não encontrado, pulando")
+        log("[WARN] model_manager.py nao encontrado, pulando")
         return False
     backup_file(mm_path)
     with open(mm_path, "r", encoding="utf-8") as f:
@@ -88,18 +93,22 @@ def fix_model_manager():
     content = re.sub(r"self\.current_tier\s*=\s*ModelTier\.[A-Z]+", "self.current_tier = ModelTier.FAST", content)
     with open(mm_path, "w", encoding="utf-8") as f:
         f.write(content)
-    log("✅ ModelManager atualizado")
+    log("[OK] ModelManager atualizado")
     return True
 
 def fix_timeout_config():
-    log("⏱️ Ajustando timeout adaptativo...")
+    log("[TIMEOUT] Ajustando timeout adaptativo...")
+    try:
+        import yaml
+    except ImportError:
+        log("[WARN] PyYAML nao instalado. Instale com: pip install PyYAML")
+        return False
     if not CONFIG_FILE.exists():
-        log("⚠️ config.yaml não encontrado, criando")
+        log("[WARN] config.yaml nao encontrado, criando")
     config = {}
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             try:
-                import yaml
                 config = yaml.safe_load(f) or {}
             except:
                 config = {}
@@ -115,16 +124,15 @@ def fix_timeout_config():
     config["ia"]["max_response_time"] = 120
     config["ia"]["preferred_models"] = ["meta/llama-3.1-70b-instruct", "bytedance/seed-oss-36b-instruct"]
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        import yaml
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-    log("✅ Configuração atualizada")
+    log("[OK] Configuracao atualizada")
     return True
 
 def patch_orchestrator_fallback():
-    log("🩹 Aplicando patch de fallback manual no orquestrador...")
+    log("[PATCH] Aplicando patch de fallback manual no orquestrador...")
     orch_path = ORCHESTRATOR_DIR / "main_orchestrator.py"
     if not orch_path.exists():
-        log("⚠️ main_orchestrator.py não encontrado")
+        log("[WARN] main_orchestrator.py nao encontrado")
         return False
     backup_file(orch_path)
     with open(orch_path, "r", encoding="utf-8") as f:
@@ -132,18 +140,18 @@ def patch_orchestrator_fallback():
     if "_apply_local_fix" not in content:
         local_fix_method = """
     def _apply_local_fix(self, error: str) -> bool:
-        \"\"\"Aplica correções locais quando IA falha\"\"\"
+        \"\"\"Aplica correcoes locais quando IA falha\"\"\"
         if 'Kotlin' in error or 'KGP' in error:
             from orchestrator.kotlin_fixer import KotlinGradleFixer
             fixer = KotlinGradleFixer(str(self.project_path))
             result = fixer.apply_fixes()
             if result['success']:
-                self._log("✅ Correção Kotlin aplicada localmente")
+                self._log("[OK] Correcao Kotlin aplicada localmente")
                 return True
             kts = self.project_path / 'android' / 'app' / 'build.gradle.kts'
             if kts.exists():
                 kts.unlink()
-                self._log("✅ build.gradle.kts removido manualmente")
+                self._log("[OK] build.gradle.kts removido manualmente")
                 return True
         return False
 """
@@ -151,14 +159,14 @@ def patch_orchestrator_fallback():
     if "self._apply_local_fix" not in content:
         content = content.replace(
             "async def _attempt_fix(self, error: str) -> Dict[str, bool]:",
-            "async def _attempt_fix(self, error: str) -> Dict[str, bool]:\n        # 0. Correção local primeiro\n        if self._apply_local_fix(error):\n            return {'success': True}"
+            "async def _attempt_fix(self, error: str) -> Dict[str, bool]:\n        # 0. Correcao local primeiro\n        if self._apply_local_fix(error):\n            return {'success': True}"
         )
-    if "self._log(f\"📤 Resposta IA" not in content:
+    if "self._log(f\"[IA] Resposta" not in content:
         ia_call_block = """
             response = await self._call_ia_model(model.name, prompt)
-            self._log(f"📤 Resposta IA ({len(response)} chars, {len(response.split())} palavras)")
+            self._log(f"[IA] Resposta ({len(response)} chars, {len(response.split())} palavras)")
             if len(response) < 200:
-                self._log(f"  Conteúdo: '{response[:100]}...'")
+                self._log(f"  Conteudo: '{response[:100]}...'")
             else:
                 self._log(f"  Primeiros 100 chars: '{response[:100]}...'")
             return response
@@ -170,18 +178,23 @@ def patch_orchestrator_fallback():
         )
     with open(orch_path, "w", encoding="utf-8") as f:
         f.write(content)
-    log("✅ Patch do orquestrador aplicado")
+    log("[OK] Patch do orquestrador aplicado")
     return True
 
 def clear_and_rebuild():
-    log("🧹 Limpando cache e reinstalando dependências...")
-    subprocess.run(["flutter", "clean"], cwd=PROJECT_ROOT, capture_output=True)
-    subprocess.run(["flutter", "pub", "get"], cwd=PROJECT_ROOT, capture_output=True)
-    log("✅ Cache limpo e dependências reinstaladas")
+    log("[CLEAN] Limpando cache e reinstalando dependencias...")
+    try:
+        subprocess.run(["flutter", "clean"], cwd=PROJECT_ROOT, capture_output=True, timeout=60)
+        subprocess.run(["flutter", "pub", "get"], cwd=PROJECT_ROOT, capture_output=True, timeout=120)
+        log("[OK] Cache limpo e dependencias reinstaladas")
+    except FileNotFoundError:
+        log("[WARN] Flutter CLI nao encontrado. Pule esta etapa manualmente.")
+    except Exception as e:
+        log(f"[WARN] Erro ao limpar/instalar: {e}")
     return True
 
 def seed_knowledge_base():
-    log("📚 Semeando KnowledgeBase com soluções conhecidas...")
+    log("[KB] Semeando KnowledgeBase com solucoes conhecidas...")
     if not KB_FILE.exists():
         kb = {"errors": {}, "patterns": {}, "solutions": {}, "stats": {"total_errors": 0, "solved_errors": 0, "learning_rate": 0}, "learned_patterns": []}
     else:
@@ -208,13 +221,14 @@ def seed_knowledge_base():
     kb["stats"]["learning_rate"] = kb["stats"]["solved_errors"] / kb["stats"]["total_errors"] if kb["stats"]["total_errors"] > 0 else 0
     with open(KB_FILE, "w", encoding="utf-8") as f:
         json.dump(kb, f, indent=2, ensure_ascii=False)
-    log("✅ KnowledgeBase semeada com solução Kotlin")
+    log("[OK] KnowledgeBase semeada com solucao Kotlin")
     return True
 
 def main():
-    log("🚀 Iniciando correção total do orquestrador...")
+    force = "--force" in sys.argv
+    log(f"[START] Iniciando correcao total do orquestrador (force={force})...")
     if not ORCHESTRATOR_DIR.exists():
-        log("❌ Diretório orchestrator não encontrado. Execute na raiz do projeto.")
+        log("[ERROR] Diretorio orchestrator nao encontrado. Execute na raiz do projeto.")
         sys.exit(1)
     apply_kotlin_fix()
     fix_model_manager()
@@ -222,9 +236,9 @@ def main():
     patch_orchestrator_fallback()
     seed_knowledge_base()
     clear_and_rebuild()
-    log("🎉 Todas as correções aplicadas com sucesso!")
-    log("📋 Agora execute: python run_orchestrator.py")
-    log("💡 Se ainda houver falha, rode manualmente: flutter build apk --release --android-skip-build-dependency-validation")
+    log("[DONE] Todas as correcoes aplicadas com sucesso!")
+    log("[NEXT] Execute: python run_orchestrator.py")
+    log("[TIP] Se falhar, rode: flutter build apk --release --android-skip-build-dependency-validation")
 
 if __name__ == "__main__":
     main()

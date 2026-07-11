@@ -28,6 +28,7 @@ class IntelligentModelManager:
     def __init__(self):
         self.models = {
             ModelTier.FAST: [
+                ModelInfo(name="meta/llama-3.1-70b-instruct", tier=ModelTier.FAST),
                 ModelInfo(name="bytedance/seed-oss-36b-instruct", tier=ModelTier.FAST),
                 ModelInfo(name="meta/llama-3.1-8b-instruct", tier=ModelTier.FAST),
             ],

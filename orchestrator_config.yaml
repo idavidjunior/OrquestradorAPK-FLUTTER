@@ -1,48 +1,45 @@
-version: "2.1"
-
 build:
-  max_retries: 3
   build_timeout: 600
-  kotlin_version: "1.9.22"
-  gradle_version: "7.4.2"
   compile_sdk: 34
-
+  gradle_version: 7.4.2
+  kotlin_version: 1.9.22
+  max_retries: 3
+dependencies:
+  version_overrides:
+    just_audio: ^0.9.40
+    on_audio_query: ^2.9.0
 ia:
-  default_model: "bytedance/seed-oss-36b-instruct"
+  default_model: meta/llama-3.1-70b-instruct
   fallback_models:
-    - "abacusai/dracarys-llama-3.1-70b-instruct"
-    - "meta/llama-3.1-8b-instruct"
-  max_response_time: 60
+  - abacusai/dracarys-llama-3.1-70b-instruct
+  - meta/llama-3.1-8b-instruct
+  max_response_time: 120
   min_response_length: 100
+  preferred_models:
+  - meta/llama-3.1-70b-instruct
+  - bytedance/seed-oss-36b-instruct
   prompt:
     force_code_block: true
-    include_full_error: true
     include_code_context: true
+    include_full_error: true
     max_code_lines: 500
-
-timeout:
-  min_timeout: 30
-  max_timeout: 120
-  adaptive_enabled: true
-  learning_rate: 0.8
-
 knowledge_base:
   auto_learn: true
   min_confidence: 0.5
   prefer_local_fixes: true
-
 local_fixes:
-  enabled: true
-  kotlin_fixer: true
   dependency_fixer: true
+  enabled: true
   import_fixer: true
-
+  kotlin_fixer: true
 monitoring:
   adb_polling_pause: true
+  log_level: INFO
   progress_feedback: true
-  log_level: "INFO"
-
-dependencies:
-  version_overrides:
-    on_audio_query: "^2.9.0"
-    just_audio: "^0.9.40"
+timeout:
+  adaptive_enabled: true
+  initial_timeout: 120
+  learning_rate: 0.6
+  max_timeout: 180
+  min_timeout: 60
+version: '2.1'
