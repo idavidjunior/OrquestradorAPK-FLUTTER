@@ -15,9 +15,9 @@
     "attempts": 0
   },
   "abacusai/dracarys-llama-3.1-70b-instruct": {
-    "avg_time": 30.765962719917297,
+    "avg_time": 30.52417974472046,
     "success_rate": 0.0,
-    "attempts": 2
+    "attempts": 5
   },
   "mistralai/mixtral-8x7b-instruct": {
     "avg_time": 0,

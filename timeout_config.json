@@ -287,7 +287,42 @@
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T19:05:15.073142",
+      "success": false,
+      "response_time": 30.301539421081543,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T19:20:26.278347",
+      "success": false,
+      "response_time": 30.412678956985474,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T19:20:56.832671",
+      "success": false,
+      "response_time": 30.374754905700684,
+      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
+      "tier": "medium"
+    },
+    {
+      "timestamp": "2026-07-11T19:35:35.017397",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T19:35:35.050789",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
     }
   ],
-  "last_update": "2026-07-11T18:59:51.944380"
+  "last_update": "2026-07-11T19:35:35.056696"
 }

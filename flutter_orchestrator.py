@@ -31,6 +31,7 @@ from orchestrator.ia_response_validator import IAResponseValidator
 from orchestrator.model_manager import IntelligentModelManager
 from orchestrator.kotlin_fixer import KotlinGradleFixer
 from orchestrator.knowledge_base_learner import KnowledgeBaseLearner
+from consolidate_build_pipeline import BuildPipelineArchitecture, BuildFixer
 
 try:
     import yaml
@@ -1443,20 +1444,19 @@ class FlutterBuildOrchestrator:
             if content:
                 files[key] = content
 
-        # Antes de chamar IA: consulta KnowledgeBaseLearner e aplica solucao se confiavel
+        # Antes de chamar IA: consulta KnowledgeBaseLearner e aplica solucao via BuildFixer consolidado
         try:
             kb_learner = KnowledgeBaseLearner()
             kb_solution, kb_confidence = kb_learner.get_solution(errors)
             if kb_solution and kb_confidence > 0.8:
-                self.log(f"[KB] Solucao de alta confianca ({kb_confidence:.0%}), aplicando e retentando build.", "INFO")
+                self.log(f"[KB] Solucao de alta confianca ({kb_confidence:.0%}), aplicando via BuildFixer...", "INFO")
+                arch = BuildPipelineArchitecture(str(self.project_path))
+                stage = arch.get_current_stage()
+                self.log(f"[KB] Etapa detectada: {stage} ({BuildPipelineArchitecture.STAGES[stage]['description']})", "INFO")
+                fixer = BuildFixer(str(self.project_path))
                 if "build.gradle.kts" in kb_solution or "Kotlin" in kb_solution or "KGP" in kb_solution:
-                    kts = self.project_path / "android" / "app" / "build.gradle.kts"
-                    if kts.exists():
-                        kts.unlink()
-                        self.log("[KB] build.gradle.kts removido", "SUCCESS")
-                    import subprocess
-                    subprocess.run([self.flutter_cmd, "clean"], cwd=self.project_path, capture_output=True)
-                    subprocess.run([self.flutter_cmd, "pub", "get"], cwd=self.project_path, capture_output=True)
+                    fixer.apply_fix("fix_kotlin_plugin")
+                    self.log("[KB] fix_kotlin_plugin aplicado via BuildFixer", "SUCCESS")
                 kb_learner.learn_from_build(errors, errors, kb_solution, True)
                 if self._retry_build(release, build_number):
                     return True
