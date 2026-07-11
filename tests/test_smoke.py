@@ -6,7 +6,6 @@ Nenhum destes testes requer customtkinter instalado.
 
 def test_import_cli():
     from flutter_orchestrator import FlutterBuildOrchestrator, Color
-    from flutter_build_orchestrator import main as wrapper_main
 
 
 def test_import_gui_modules_without_ctk():
