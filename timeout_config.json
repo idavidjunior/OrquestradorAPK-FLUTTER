@@ -273,7 +273,21 @@
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T18:59:51.893711",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-11T18:59:51.944380",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
     }
   ],
-  "last_update": "2026-07-11T18:54:58.018670"
+  "last_update": "2026-07-11T18:59:51.944380"
 }

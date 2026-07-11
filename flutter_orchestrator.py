@@ -1443,19 +1443,23 @@ class FlutterBuildOrchestrator:
             if content:
                 files[key] = content
 
-        # Antes de chamar IA: verifica KnowledgeBaseLearner (pacote orchestrator)
+        # Antes de chamar IA: consulta KnowledgeBaseLearner e aplica solucao se confiavel
         try:
             kb_learner = KnowledgeBaseLearner()
-            solution, confidence = kb_learner.get_solution(errors)
-            if solution and confidence > 0.8:
-                self.log(f"[KB] Solucao de alta confianca ({confidence:.0%}) na KnowledgeBase, aplicando.", "INFO")
-                if "build.gradle.kts" in solution or "Kotlin" in solution:
+            kb_solution, kb_confidence = kb_learner.get_solution(errors)
+            if kb_solution and kb_confidence > 0.8:
+                self.log(f"[KB] Solucao de alta confianca ({kb_confidence:.0%}), aplicando e retentando build.", "INFO")
+                if "build.gradle.kts" in kb_solution or "Kotlin" in kb_solution or "KGP" in kb_solution:
                     kts = self.project_path / "android" / "app" / "build.gradle.kts"
                     if kts.exists():
                         kts.unlink()
-                        self.log("[KB] build.gradle.kts removido (solucao KB)", "SUCCESS")
-            if solution and confidence > 0.5:
-                self.log(f"[KB] Solucao via IA da KB (confianca: {confidence:.0%})", "INFO")
+                        self.log("[KB] build.gradle.kts removido", "SUCCESS")
+                    import subprocess
+                    subprocess.run([self.flutter_cmd, "clean"], cwd=self.project_path, capture_output=True)
+                    subprocess.run([self.flutter_cmd, "pub", "get"], cwd=self.project_path, capture_output=True)
+                kb_learner.learn_from_build(errors, errors, kb_solution, True)
+                if self._retry_build(release, build_number):
+                    return True
         except Exception as kb_e:
             self.log(f"[KB] Erro ao consultar KnowledgeBaseLearner: {kb_e}", "DEBUG")
 
