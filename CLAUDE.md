@@ -49,6 +49,27 @@ python flutter_orchestrator.py /caminho/do/projeto --auto-install
 python flutter_orchestrator_gui.py
 ```
 
+## Android Pure SDK (novo pipeline)
+
+O orquestrador agora suporta 3 tipos de projeto:
+
+| Tipo | Detec\u00e7\u00e3o | Pipeline |
+|------|-------------------|----------|
+| `flutter` | pubspec.yaml | `flutter build apk` |
+| `android` | settings.gradle(.kts) | `./gradlew assembleRelease` |
+| `android_pure_sdk` | AndroidManifest.xml + res/ + src/ | aapt -> javac -> jar -> d8 -> apksigner |
+
+Para o tipo `android_pure_sdk`, o pipeline \u00e9 executado pela classe `PureSdkBuilder` em `pure_sdk_builder.py`:
+
+1. `aapt package -J src` (R.java)
+2. `javac -cp android.jar` (.class)
+3. `jar cf classes.jar` (.jar)
+4. `d8 --lib android.jar` (classes.dex)
+5. `aapt package -F unsigned.apk` (APK esqueleto)
+6. `aapt add unsigned.apk classes.dex` (injeta DEX)
+7. `zipalign` (alinhamento)
+8. `apksigner sign` (assinatura)
+
 ## Padr\u00f5es de C\u00f3digo
 
 - Python 3.7+, tipagem com type hints

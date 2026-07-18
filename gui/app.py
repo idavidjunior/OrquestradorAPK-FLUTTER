@@ -106,11 +106,14 @@ def run():
         def __init__(self):
             super().__init__()
             self.title("Flutter Build Orchestrator")
-            self.geometry("1150x780")
             self.minsize(950, 650)
             self.state("zoomed")
+            # Reforca maximizado apos o loop iniciar
+            self.after(50, lambda: self.state("zoomed"))
 
             self.project_dir = None
+            self.project_source = None  # None | "folder" | "github" | "paste"
+            self.recent_projects = []  # list of {"path":..., "name":..., "source":..., "ts":...}
             self.orch = None
             self.build_running = False
 
@@ -222,6 +225,20 @@ def run():
             )
             self.btn_github.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
 
+            # -- Projetos Recentes --
+            recent_lbl = ctk.CTkLabel(
+                left, text="Projetos Recentes",
+                font=ctk.CTkFont(size=12),
+            )
+            recent_lbl.grid(row=r, column=0, padx=10, pady=(8, 0), sticky="w"); r += 1
+
+            self.recent_frame = ctk.CTkScrollableFrame(left, height=120)
+            self.recent_frame.grid(row=r, column=0, padx=10, pady=2, sticky="ew"); r += 1
+            self.recent_frame.grid_columnconfigure(0, weight=1)
+
+            # Placeholder — _update_recent_menu preenche as linhas
+            self._recent_widgets = []
+
             # -- Colar C\u00f3digo --
             paste_lbl = ctk.CTkLabel(
                 left, text="Colar C\u00f3digo (Dart / YAML / XML):",
@@ -245,8 +262,8 @@ def run():
             self.btn_analyze.grid(row=0, column=0, padx=(0, 2), sticky="ew")
 
             self.btn_clear_paste = ctk.CTkButton(
-                paste_btn_row, text="Limpar", fg_color="#555",
-                command=lambda: self.paste_text.delete("0.0", "end"),
+                paste_btn_row, text="Limpar (reset total)", fg_color="#B71C1C",
+                command=self._reset_all,
             )
             self.btn_clear_paste.grid(row=0, column=1, padx=(2, 0), sticky="ew")
 
@@ -366,6 +383,13 @@ def run():
             )
             self.btn_select_adb.pack(fill="x", pady=2)
 
+            self.btn_install_apk = ctk.CTkButton(
+                util_frame, text="Instalar APK no dispositivo",
+                fg_color="#00695C", hover_color="#004D40",
+                command=self._install_apk_manual,
+            )
+            self.btn_install_apk.pack(fill="x", pady=2)
+
             self._install_adb_var = ctk.BooleanVar(value=True)
             self.check_install_adb = ctk.CTkCheckBox(
                 util_frame, text="Instalar APK no dispositivo via ADB",
@@ -460,9 +484,17 @@ def run():
                 # N\u00e3o restaura modelos em cache — ser\u00e3o re-descobertos
                 # na pr\u00f3xima valida\u00e7\u00e3o (evita modelo quebrado de sess\u00e3o anterior)
                 proj = data.get("last_project_dir", "")
+                recents = data.get("recent_projects", [])
+                if recents:
+                    self.recent_projects = recents
+                    self._update_recent_menu()
                 if proj and Path(proj).exists():
                     self.project_dir = Path(proj)
+                    self.project_source = data.get("project_source", "folder")
+                    self._add_to_recent(self.project_dir, self.project_source)
+                    self._update_source_ui()
                     self.log.ok(f"\u00daltimo projeto restaurado: {proj}")
+                self.log.info("Estado restaurado da sess\u00e3o anterior")
                 self.log.info("Estado restaurado da sess\u00e3o anterior")
             except Exception as e:
                 self.log.warn(f"N\u00e3o foi poss\u00edvel restaurar estado: {e}")
@@ -475,6 +507,8 @@ def run():
                     "auto_selected_models": dict(self._auto_selected_models),
                     "last_project_dir": str(self.project_dir)
                     if self.project_dir else "",
+                    "project_source": self.project_source or "",
+                    "recent_projects": self.recent_projects,
                 }
                 self._state_file.write_text(
                     json.dumps(data, indent=2, ensure_ascii=False),
@@ -487,12 +521,206 @@ def run():
             atual = ctk.get_appearance_mode()
             ctk.set_appearance_mode("Light" if atual == "Dark" else "Dark")
 
+        # ── Gestão da fonte do projeto ─────────────────────────────────
+        def _update_source_ui(self):
+            """Atualiza destaque dos botoes de fonte e mostra info no paste area."""
+            if self.build_running:
+                return
+            # Highlight active source, reset the other (avoid None — CTk 6 rejects it)
+            kw_pasta = {}
+            kw_github = {}
+            if self.project_source == "folder":
+                kw_pasta = dict(fg_color="#2E7D32", border_width=2, border_color="#81C784", hover_color="#1B5E20")
+                kw_github = dict(border_width=0)
+            elif self.project_source == "github":
+                kw_github = dict(fg_color="#1565C0", border_width=2, border_color="#64B5F6", hover_color="#0D47A1")
+                kw_pasta = dict(border_width=0)
+            else:
+                kw_pasta = dict(border_width=0)
+                kw_github = dict(border_width=0)
+            self.btn_pasta.configure(**kw_pasta)
+            self.btn_github.configure(**kw_github)
+            # Update paste area
+            self.paste_text.configure(state="normal")
+            self.paste_text.delete("0.0", "end")
+            if self.project_source and self.project_source != "paste" and self.project_dir:
+                self.paste_text.insert("0.0", self._project_info_text())
+                self.paste_text.configure(state="disabled")
+            else:
+                self.paste_text.configure(state="normal")
+
+        def _project_info_text(self) -> str:
+            if not self.project_dir:
+                return ""
+            lines = [f"Projeto: {self.project_dir}"]
+            # Lista arquivos relevantes
+            for name in ["pubspec.yaml", "settings.gradle.kts", "settings.gradle",
+                          "build.gradle.kts", "build.gradle"]:
+                f = self.project_dir / name
+                if f.exists():
+                    lines.append(f"  {name}  ({f.stat().st_size} bytes)")
+            app_dir = self.project_dir / "app"
+            if app_dir.exists():
+                for name in ["build.gradle.kts", "build.gradle", "src/main/AndroidManifest.xml"]:
+                    f = app_dir / name
+                    if f.exists():
+                        lines.append(f"  app/{name}  ({f.stat().st_size} bytes)")
+            lib_dir = self.project_dir / "lib"
+            if lib_dir.exists():
+                darts = list(lib_dir.rglob("*.dart"))
+                if darts:
+                    lines.append(f"  lib/  ({len(darts)} arquivos .dart)")
+            return "\n".join(lines)
+
+        def _reset_all(self):
+            """Limpa tudo e reinicia o programa para aplicar atualizacoes."""
+            self.project_dir = None
+            self.project_source = None
+            self.orch = None
+            self._last_errors = []
+            self._last_fix_applied = None
+            self.build_log = []
+            self._update_source_ui()
+            self.paste_text.configure(state="normal")
+            self.paste_text.delete("0.0", "end")
+            self.lbl_api_status.configure(text="")
+            self.log.build_log.clear()
+            self.log.widget.delete("0.0", "end")
+            try:
+                self._state_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            self.log.ok("Estado resetado. Reiniciando programa para aplicar atualizacoes...")
+            # Hot-reload: reinicia o processo Python
+            self.after(1000, self._restart_program)
+
+        @staticmethod
+        def _restart_program():
+            """Reinicia o processo Python atual para carregar alteracoes no codigo."""
+            import sys
+            try:
+                python = sys.executable
+                script = Path(sys.argv[0]).resolve()
+                args = sys.argv[1:]
+                subprocess.Popen([python, str(script)] + args)
+                sys.exit(0)
+            except Exception:
+                pass
+
+        # ── Projetos recentes ───────────────────────────────────────────
+        _RECENT_KEY_FILES = [
+            "pubspec.yaml", "settings.gradle.kts", "settings.gradle",
+            "app/build.gradle.kts", "app/build.gradle",
+            "app/src/main/AndroidManifest.xml",
+        ]
+
+        def _compute_file_hashes(self, proj_path: Path) -> dict:
+            hashes = {}
+            for name in self._RECENT_KEY_FILES:
+                f = proj_path / name
+                if f.exists():
+                    hashes[name] = int(f.stat().st_mtime * 1000)
+            lib = proj_path / "lib"
+            if lib.exists():
+                for f in sorted(lib.rglob("*.dart")):
+                    hashes[str(f.relative_to(proj_path))] = int(f.stat().st_mtime * 1000)
+            return hashes
+
+        def _add_to_recent(self, proj_path: Path, source: str):
+            if source == "paste":
+                return
+            name = proj_path.name
+            entry = {
+                "path": str(proj_path.resolve()), "name": name, "source": source,
+                "last_build": datetime.now().isoformat(),
+                "file_hashes": self._compute_file_hashes(proj_path),
+            }
+            self.recent_projects = [p for p in self.recent_projects if p.get("path") != entry["path"]]
+            self.recent_projects.insert(0, entry)
+            self.recent_projects = self.recent_projects[:10]
+            self._update_recent_menu()
+
+        def _check_for_updates(self, entry: dict) -> bool:
+            p = Path(entry["path"])
+            if not p.exists():
+                return False
+            old_hashes = entry.get("file_hashes", {})
+            if not old_hashes:
+                return True
+            current = self._compute_file_hashes(p)
+            for k, v in current.items():
+                if old_hashes.get(k) != v:
+                    return True
+            return False
+
+        def _update_recent_menu(self):
+            if not hasattr(self, "recent_frame"):
+                return
+            # Limpa widgets antigos
+            for w in self._recent_widgets:
+                w.destroy()
+            self._recent_widgets.clear()
+
+            if not self.recent_projects:
+                empty = ctk.CTkLabel(self.recent_frame, text="(nenhum)", fg_color="transparent")
+                empty.grid(row=0, column=0, padx=4, pady=2, sticky="ew")
+                self._recent_widgets.append(empty)
+                return
+
+            for idx, p in enumerate(self.recent_projects):
+                row = ctk.CTkFrame(self.recent_frame, fg_color="transparent")
+                row.grid(row=idx, column=0, padx=2, pady=1, sticky="ew")
+                row.grid_columnconfigure(0, weight=1)
+
+                status = " ✓" if not self._check_for_updates(p) else ""
+                label = ctk.CTkButton(
+                    row, text=f"{p['name']}  ({p['source']}){status}",
+                    fg_color="transparent", hover_color="#333",
+                    anchor="w", compound="left",
+                    command=lambda e=p: self._on_recent_click(e),
+                )
+                label.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+
+                btn_rm = ctk.CTkButton(
+                    row, text="✕", width=28, fg_color="#B71C1C",
+                    hover_color="#D32F2F",
+                    command=lambda e=p: self._remove_recent(e),
+                )
+                btn_rm.grid(row=0, column=1, padx=(0, 0))
+
+                self._recent_widgets.extend([row, label, btn_rm])
+
+        def _remove_recent(self, entry: dict):
+            self.recent_projects = [p for p in self.recent_projects if p.get("path") != entry["path"]]
+            self._update_recent_menu()
+            self.log.ok(f"Removido dos recentes: {entry['name']}")
+
+        def _on_recent_click(self, entry: dict):
+            p = Path(entry["path"])
+            if not p.exists():
+                self.log.err(f"Projeto nao encontrado: {p}")
+                self.recent_projects = [e for e in self.recent_projects if e.get("path") != entry["path"]]
+                self._update_recent_menu()
+                return
+            self.project_dir = p
+            self.project_source = entry["source"]
+            self._update_source_ui()
+            self.log.ok(f"Projeto recente: {p}")
+            if self._check_for_updates(entry):
+                self.log.info("Atualizações detectadas — compilando...")
+            else:
+                self.log.info("Projeto inalterado desde último build. Iniciando compilação...")
+            self.after(500, self._start_build)
+
         def _select_folder(self):
             pasta = filedialog.askdirectory(
-                title="Selecione a pasta do projeto Flutter"
+                title="Selecione a pasta do projeto"
             )
             if pasta:
                 self.project_dir = Path(pasta).resolve()
+                self.project_source = "folder"
+                self._add_to_recent(self.project_dir, "folder")
+                self._update_source_ui()
                 self._save_state()
                 self.log.ok(f"Projeto selecionado: {self.project_dir}")
                 self.after(500, self._start_build)
@@ -517,6 +745,9 @@ def run():
                 )
                 if r.returncode == 0:
                     self.project_dir = dest
+                    self.project_source = "github"
+                    self._add_to_recent(dest, "github")
+                    self._update_source_ui()
                     self.log.ok(f"Clonado: {dest}")
                     self.after(500, self._start_build)
                 else:
@@ -661,6 +892,8 @@ def run():
                 )
 
                 self.project_dir = project_dir
+                self.project_source = "paste"
+                self._update_source_ui()
                 self._save_state()
                 _rui("OK: Projeto preparado com sucesso!")
                 self.log.ok(f"Projeto preparado em: {project_dir}")
@@ -685,8 +918,8 @@ def run():
                     str(Path.home() / "AppData" / "Local" / "Android" / "Sdk")
                 )
                 lp.write_text(
-                    f"sdk.dir={android_home}\n"
-                    f"flutter.sdk={flutter_sdk}\n"
+                    f"sdk.dir={android_home.replace(chr(92), '/')}\n"
+                    f"flutter.sdk={flutter_sdk.replace(chr(92), '/')}\n"
                     f"flutter.buildMode=release\n"
                     f"flutter.versionName=1.0.0\n"
                     f"flutter.versionCode=1\n",
@@ -704,7 +937,7 @@ def run():
                 "targetSdk": "34",
                 "minSdk": "21",
             }
-            flutter_cmd = App._find_flutter_cmd()
+            flutter_cmd = BuildOrchestratorGUI._find_flutter_cmd()
             if not flutter_cmd:
                 return versions
             try:
@@ -760,7 +993,7 @@ def run():
         @staticmethod
         def _write_minimal_project(project_dir: Path):
             """Gera estrutura Flutter completa para build Android."""
-            versions = App._get_template_versions()
+            versions = BuildOrchestratorGUI._get_template_versions()
             dirs = [
                 "lib",
                 "test",
@@ -1855,6 +2088,10 @@ def run():
                 if success and self.check_install_adb.get() and self.adb_available:
                     self._install_via_adb()
 
+                if success and self.project_dir and self.project_source:
+                    self._add_to_recent(self.project_dir, self.project_source)
+                    self._save_state()
+
                 self._on_progress(100, "Conclu\u00eddo" if success else "Falhou")
             except Exception as e:
                 self.log.err(f"Erro inesperado: {e}")
@@ -1886,7 +2123,19 @@ def run():
             self.btn_open_output.configure(state=est)
             self.btn_save_api.configure(state=est)
             self.btn_select_adb.configure(state=est)
+            self.btn_install_apk.configure(state=est)
+            self.btn_clear_paste.configure(state=est)
+            self.paste_text.configure(state=est)
+            if hasattr(self, "recent_frame"):
+                for w in self._recent_widgets:
+                    try:
+                        w.configure(state=est)
+                    except Exception:
+                        pass
             self.btn_stop.configure(state="normal" if running else "disabled")
+            # When build finishes, restore correct paste_text state per source type
+            if not running:
+                self.after(50, self._update_source_ui)
             # Pausa/retoma ADB poll para n\u00e3o floodar log durante build
             if running:
                 self._stop_adb_poll()
@@ -1909,13 +2158,13 @@ def run():
                 return
             threading.Thread(target=self._run_adb_check, daemon=True).start()
 
-        def _adb_cmd(self, *args):
+        def _adb_cmd(self, *args, timeout=10):
             """Executa comando ADB usando o path resolvido."""
             if self._adb_path and self._adb_path != "adb":
                 cmd = [self._adb_path] + list(args)
             else:
                 cmd = ["adb"] + list(args)
-            return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
         def _run_adb_check(self):
             result = {"available": False, "device": "", "error": None}
@@ -2001,9 +2250,32 @@ def run():
                 return
             self.log.info(f"Instalando {Path(apk).name} no dispositivo...")
             try:
-                r = self._adb_cmd("-s", self.adb_device, "install", "-r", str(apk))
+                r = self._adb_cmd("-s", self.adb_device, "install", "-r", str(apk), timeout=120)
                 if r.returncode == 0:
                     self.log.ok("APK instalado com sucesso no dispositivo!")
+                else:
+                    self.log.err(f"Falha na instala\u00e7\u00e3o: {r.stderr[:300]}")
+            except Exception as e:
+                self.log.err(f"Erro: {e}")
+
+        def _install_apk_manual(self):
+            """Instala o APK mais recente do build_output no dispositivo manualmente."""
+            # Procura APK no build_output/
+            build_output = Path(self.project_dir) / "build_output" if self.project_dir else Path("build_output")
+            apks = sorted(build_output.glob("*.apk"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if not apks:
+                self.log.err("Nenhum APK encontrado em build_output/")
+                return
+            apk = apks[0]
+            self.log.info(f"Instalando {apk.name} no dispositivo...")
+            try:
+                device = getattr(self, "adb_device", None)
+                if device:
+                    r = self._adb_cmd("-s", device, "install", "-r", str(apk), timeout=120)
+                else:
+                    r = self._adb_cmd("install", "-r", str(apk), timeout=120)
+                if r.returncode == 0:
+                    self.log.ok(f"{apk.name} instalado com sucesso!")
                 else:
                     self.log.err(f"Falha na instala\u00e7\u00e3o: {r.stderr[:300]}")
             except Exception as e:
@@ -2027,9 +2299,9 @@ def run():
             try:
                 if os.name == "nt":
                     os.startfile(str(pasta))
-                elif os.uname().sysname == "Darwin":
+                elif platform.system() == "Darwin":
                     subprocess.run(["open", str(pasta)])
-                else:
+                elif platform.system() == "Linux":
                     subprocess.run(["xdg-open", str(pasta)])
                 self.log.ok(f"Pasta aberta: {pasta}")
             except Exception as e:

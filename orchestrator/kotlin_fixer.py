@@ -101,8 +101,8 @@ class KotlinGradleFixer:
         with open(gradle_path, 'r', encoding='utf-8') as f:
             content = f.read()
         content = re.sub(
-            r"compileSdkVersion\s+\d+",
-            "compileSdkVersion 34",
+            r"compileSdk(Version)?\s+\d+",
+            "compileSdkVersion 36",
             content
         )
         if "namespace" not in content:

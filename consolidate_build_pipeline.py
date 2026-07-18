@@ -196,7 +196,7 @@ class BuildFixer:
     def regenerate_android_properties(self):
         """Recria local.properties com o caminho correto do SDK."""
         local_props = self.project_path / "android" / "local.properties"
-        flutter_sdk = os.environ.get('FLUTTER_ROOT') or "C:\\Users\\Playtec-bancada\\flutter"
+        flutter_sdk = (os.environ.get('FLUTTER_ROOT') or "C:\\Users\\Playtec-bancada\\flutter").replace('\\', '/')
         with open(local_props, 'w', encoding='utf-8') as f:
             f.write(f"flutter.sdk={flutter_sdk}\n")
         self.fixes_applied.append("local_properties")
@@ -231,31 +231,25 @@ class BuildFixer:
         return True
 
     def fix_kotlin_plugin(self):
-        """Remove build.gradle.kts e recria build.gradle padrao."""
-        app_gradle_kts = self.project_path / "android" / "app" / "build.gradle.kts"
-        if app_gradle_kts.exists():
-            app_gradle_kts.unlink()
-        app_gradle = self.project_path / "android" / "app" / "build.gradle"
-        with open(app_gradle, 'w', encoding='utf-8') as f:
-            f.write('''android {
-    compileSdkVersion 34
-    namespace "com.example.app"
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
-
-dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-}
-''')
+        """Fixa app/build.gradle(.kts) in-place sem deletar. Nao substitui KTS por Groovy."""
+        kts = self.project_path / "android" / "app" / "build.gradle.kts"
+        gradle = self.project_path / "android" / "app" / "build.gradle"
+        if kts.exists():
+            try:
+                content = kts.read_text(encoding='utf-8')
+                original = content
+                content = re.sub(r'compileSdk\s*=\s*flutter\.compileSdkVersion', 'compileSdk = 36', content)
+                content = re.sub(r'compileSdk\s*=\s*\d+', 'compileSdk = 36', content)
+                if "namespace" not in content:
+                    content = re.sub(r'(android\s*\{)', r'\1\n    namespace = "com.example.app"', content)
+                if content != original:
+                    kts.write_text(content, encoding='utf-8')
+                    self.fixes_applied.append("fix_kotlin_kts")
+            except Exception as e:
+                self.fixes_applied.append(f"fix_kotlin_kts_error:{e}")
+        elif not gradle.exists() or gradle.stat().st_size == 0:
+            gradle.write_text(self._app_build_gradle_content(), encoding='utf-8')
+            self.fixes_applied.append("fix_kotlin_gradle_fallback")
         project_gradle = self.project_path / "android" / "build.gradle"
         if project_gradle.exists():
             with open(project_gradle, 'r', encoding='utf-8', errors='ignore') as f:
@@ -319,31 +313,74 @@ dependencies {
         self.fixes_applied.append("zipalign")
         return True
 
+    @staticmethod
+    def _app_build_gradle_content(project_name="app"):
+        """Retorna conteudo de app/build.gradle com Flutter Gradle plugin (obrigatorio)."""
+        return (
+            'plugins {\n'
+            '    id "com.android.application"\n'
+            '    id "kotlin-android"\n'
+            '    id "dev.flutter.flutter-gradle-plugin"\n'
+            '}\n'
+            'android {\n'
+            f'    namespace "com.{project_name}.app"\n'
+            '    compileSdkVersion 36\n'
+            '    compileOptions {\n'
+            '        sourceCompatibility JavaVersion.VERSION_17\n'
+            '        targetCompatibility JavaVersion.VERSION_17\n'
+            '    }\n'
+            '    kotlinOptions {\n'
+            '        jvmTarget = "17"\n'
+            '    }\n'
+            '    defaultConfig {\n'
+            f'        applicationId "com.{project_name}.app"\n'
+            '        minSdkVersion 21\n'
+            '        targetSdkVersion 36\n'
+            '        versionCode 1\n'
+            '        versionName "1.0"\n'
+            '    }\n'
+            '}\n'
+        )
+
     def remove_kts_before_build(self):
-        """Pre-build hook: remove build.gradle.kts forçadamente antes da compilacao nativa."""
+        """Pre-build hook: fixa app/build.gradle.kts in-place em vez de substituir por Groovy.
+        Mantem a estrutura original do Flutter (KTS) e apenas ajusta versoes.
+        Se nao existir .kts nem .gradle, cria .gradle com conteudo completo.
+        """
         kts = self.project_path / "android" / "app" / "build.gradle.kts"
-        if kts.exists():
-            kts.unlink()
-        # Garante que build.gradle existe com conteudo minimo
         gradle = self.project_path / "android" / "app" / "build.gradle"
-        if not gradle.exists() or gradle.stat().st_size == 0:
-            with open(gradle, 'w', encoding='utf-8') as f:
-                f.write('''android {
-    compileSdkVersion 34
-    namespace "com.example.app"
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
-dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-}
-''')
+        if kts.exists():
+            try:
+                content = kts.read_text(encoding='utf-8')
+                original = content
+                # Forca compileSdk minimo 36 (plugins como shared_preferences_android exigem)
+                content = re.sub(
+                    r'compileSdk\s*=\s*flutter\.compileSdkVersion',
+                    'compileSdk = 36',
+                    content
+                )
+                content = re.sub(
+                    r'compileSdk\s*=\s*\d+',
+                    'compileSdk = 36',
+                    content
+                )
+                # Garante que namespace esta definido
+                if "namespace" not in content:
+                    content = re.sub(
+                        r'(android\s*\{)',
+                        r'\1\n    namespace = "com.example.app"',
+                        content
+                    )
+                if content != original:
+                    kts.write_text(content, encoding='utf-8')
+                    self.fixes_applied.append("fix_kts_compileSdk")
+            except Exception as e:
+                self.fixes_applied.append(f"fix_kts_error:{e}")
+            # Nao remove o .kts — mantem a estrutura original do Flutter
+        elif not gradle.exists() or gradle.stat().st_size == 0:
+            # So cria .gradle se nao existir nem .kts nem .gradle
+            gradle.write_text(self._app_build_gradle_content(), encoding='utf-8')
+            self.fixes_applied.append("create_gradle_fallback")
         self.fixes_applied.append("remove_kts")
         return True
 
@@ -351,30 +388,14 @@ dependencies {
         """Detecta e corrige problemas completos de Gradle/Kotlin."""
         log_msg = "[FIX] Verificando e corrigindo configuracao Gradle..."
         print(log_msg)
-        # 1. Remove .kts
+        # 1. Fixa .kts in-place (nao remove)
         kts = self.project_path / "android" / "app" / "build.gradle.kts"
-        kts_removed = kts.exists()
-        if kts_removed:
-            kts.unlink()
-        # 2. Recria build.gradle
+        if kts.exists():
+            self.remove_kts_before_build()
+        # 2. Garante build.gradle com conteudo completo se .kts nao existir
         gradle = self.project_path / "android" / "app" / "build.gradle"
-        with open(gradle, 'w', encoding='utf-8') as f:
-            f.write('''android {
-    compileSdkVersion 34
-    namespace "com.example.app"
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
-dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-}
-''')
+        if not kts.exists() and (not gradle.exists() or gradle.stat().st_size == 0):
+            gradle.write_text(self._app_build_gradle_content(), encoding='utf-8')
         # 3. Ajusta project build.gradle
         project_gradle = self.project_path / "android" / "build.gradle"
         if project_gradle.exists():
@@ -429,22 +450,31 @@ dependencies {
             main_dart = self.project_path / "lib" / "main.dart"
             if main_dart.exists():
                 shutil.copy2(main_dart, backup / "main.dart")
-            pubspec = self.project_path / "pubspec.yaml"
-            if pubspec.exists():
-                shutil.copy2(pubspec, backup / "pubspec.yaml")
+            pubspec_path = self.project_path / "pubspec.yaml"
+            project_name = "app"
+            if pubspec_path.exists():
+                shutil.copy2(pubspec_path, backup / "pubspec.yaml")
+                try:
+                    import re
+                    m = re.search(r'^name:\s*(\S+)', pubspec_path.read_text(encoding='utf-8'), re.MULTILINE)
+                    if m:
+                        project_name = m.group(1)
+                except Exception:
+                    pass
             # Remove android/
             android_dir = self.project_path / "android"
             if android_dir.exists():
                 shutil.rmtree(android_dir, ignore_errors=True)
-            # Tenta flutter create
+            # Tenta flutter create com --force e --project-name
             try:
-                subprocess.run(["flutter", "create", "."], cwd=self.project_path,
-                               capture_output=True, text=True, timeout=60)
+                subprocess.run(
+                    ["flutter", "create", "--force", ".", "--project-name", project_name],
+                    cwd=self.project_path, capture_output=True, text=True, timeout=60)
             except Exception:
                 pass
             # Se a pasta android ainda nao existe ou esta vazia, cria manual
             if not (self.project_path / "android" / "app" / "build.gradle").exists():
-                self._create_manual_android()
+                self._create_manual_android(project_name)
             # Restaura codigo
             if (backup / "main.dart").exists():
                 lib = self.project_path / "lib"
@@ -462,7 +492,7 @@ dependencies {
                 shutil.rmtree(backup, ignore_errors=True)
             return False
 
-    def _create_manual_android(self):
+    def _create_manual_android(self, project_name="app"):
         """Cria estrutura android manual (fallback se flutter create falhar)."""
         android = self.project_path / "android"
         app = android / "app"
@@ -471,7 +501,7 @@ dependencies {
         (src / "AndroidManifest.xml").write_text(
             '<?xml version="1.0" encoding="utf-8"?>\n'
             '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n'
-            '    package="com.example.app">\n'
+            f'    package="com.{project_name}.app">\n'
             '    <application android:label="app" android:name="${applicationName}"\n'
             '        android:icon="@mipmap/ic_launcher">\n'
             '        <activity android:name=".MainActivity" android:exported="true"\n'
@@ -493,29 +523,12 @@ dependencies {
             '    </application>\n'
             '</manifest>\n', encoding='utf-8')
         (app / "build.gradle").write_text(
-            'plugins {\n    id "com.android.application"\n    id "kotlin-android"\n}\n'
-            'android {\n    compileSdkVersion 34\n'
-            '    namespace "com.example.app"\n'
-            '    compileOptions {\n'
-            '        sourceCompatibility JavaVersion.VERSION_17\n'
-            '        targetCompatibility JavaVersion.VERSION_17\n    }\n'
-            '    kotlinOptions { jvmTarget = "17" }\n'
-            '    defaultConfig {\n'
-            '        applicationId "com.example.app"\n'
-            '        minSdkVersion 21\n        targetSdkVersion 34\n'
-            '        versionCode 1\n        versionName "1.0"\n    }\n'
-            '    buildTypes {\n        release {\n'
-            '            minifyEnabled false\n'
-            '            proguardFiles getDefaultProguardFile("proguard-android.txt"),'
-            ' "proguard-rules.pro"\n        }\n    }\n}\n'
-            'dependencies {\n'
-            '    implementation "androidx.core:core-ktx:1.12.0"\n'
-            '    implementation "androidx.appcompat:appcompat:1.6.1"\n}\n', encoding='utf-8')
+            self._app_build_gradle_content(project_name), encoding='utf-8')
         (android / "build.gradle").write_text(
             'buildscript {\n    ext.kotlin_version = "1.9.22"\n'
             '    repositories { google(); mavenCentral() }\n'
             '    dependencies {\n'
-            '        classpath "com.android.tools.build:gradle:7.4.2"\n'
+            '        classpath "com.android.tools.build:gradle:8.1.0"\n'
             '        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"\n'
             '    }\n}\n'
             'allprojects {\n    repositories { google(); mavenCentral() }\n}\n'
@@ -525,11 +538,48 @@ dependencies {
             'subprojects {\n    project.evaluationDependsOn(":app")\n}\n'
             'tasks.register("clean", Delete) {\n    delete rootProject.buildDir\n}\n',
             encoding='utf-8')
-        (android / "settings.gradle").write_text("include ':app'\n", encoding='utf-8')
+        # settings.gradle com pluginManagement (essencial para Flutter 3.x)
+        sdk = os.environ.get('FLUTTER_ROOT') or "C:\\Users\\Playtec-bancada\\flutter"
+        (android / "settings.gradle").write_text(
+            'pluginManagement {\n'
+            '    def flutterSdkPath = {\n'
+            '        def properties = new Properties()\n'
+            '        file("local.properties").withInputStream { properties.load(it) }\n'
+            '        def flutterSdkPath = properties.getProperty("flutter.sdk")\n'
+            '        assert flutterSdkPath != null, '
+            '"flutter.sdk not set in local.properties"\n'
+            '        return flutterSdkPath\n'
+            '    }\n'
+            f'    settings.ext.flutterSdkPath = flutterSdkPath()\n\n'
+            '    includeBuild("${settings.ext.flutterSdkPath}'
+            '/packages/flutter_tools/gradle")\n\n'
+            '    repositories {\n'
+            '        google()\n'
+            '        mavenCentral()\n'
+            '        gradlePluginPortal()\n'
+            '    }\n'
+            '}\n\n'
+            'plugins {\n'
+            '    id "dev.flutter.flutter-plugin-loader" version "1.0.0"\n'
+            '    id "com.android.application" version "8.1.0" apply false\n'
+            '    id "org.jetbrains.kotlin.android" version "1.9.22" apply false\n'
+            '}\n\n'
+            'include ":app"\n', encoding='utf-8')
         (android / "gradle.properties").write_text(
             "android.useAndroidX=true\nandroid.enableJetifier=true\n"
             "org.gradle.jvmargs=-Xmx4G\n", encoding='utf-8')
-        sdk = os.environ.get('FLUTTER_ROOT') or "C:\\Users\\Playtec-bancada\\flutter"
+        # Gradle wrapper (essencial para o Gradle saber qual versao usar)
+        wrapper_dir = android / "gradle" / "wrapper"
+        wrapper_dir.mkdir(parents=True, exist_ok=True)
+        (wrapper_dir / "gradle-wrapper.properties").write_text(
+            "distributionBase=GRADLE_USER_HOME\n"
+            "distributionPath=wrapper/dists\n"
+            "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.3-bin.zip\n"
+            "networkTimeout=10000\n"
+            "validateDistributionUrl=true\n"
+            "zipStoreBase=GRADLE_USER_HOME\n"
+            "zipStorePath=wrapper/dists\n", encoding='utf-8')
+        sdk = (os.environ.get('FLUTTER_ROOT') or "C:\\Users\\Playtec-bancada\\flutter").replace('\\', '/')
         (android / "local.properties").write_text(f"flutter.sdk={sdk}\n", encoding='utf-8')
 
     FIX_ACTIONS = {

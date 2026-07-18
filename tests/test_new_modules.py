@@ -14,9 +14,9 @@ from orchestrator.main_orchestrator import FlutterOrchestrator
 class TestAdaptiveTimeoutManager:
     def test_init(self):
         tm = AdaptiveTimeoutManager()
-        assert tm.min_timeout == 30
+        assert tm.min_timeout == 60
         assert tm.max_timeout == 300
-        assert 30 <= tm.current_timeout <= 300
+        assert 60 <= tm.current_timeout <= 300
 
     def test_get_timeout_increases_with_attempt(self):
         tm = AdaptiveTimeoutManager()
@@ -142,3 +142,99 @@ class TestFlutterOrchestrator:
         import asyncio
         result = asyncio.run(orch._validate_project())
         assert not result['success']
+
+
+class TestPureSdkBuilder:
+    def test_init(self):
+        from pure_sdk_builder import PureSdkBuilder
+        builder = PureSdkBuilder("./test_pure")
+        assert builder.project_path == Path("./test_pure").resolve()
+        assert builder.build_dir.name == "build_pure"
+
+    def test_validate_project_success(self, tmp_path):
+        from pure_sdk_builder import PureSdkBuilder
+        # Cria estrutura minima de projeto Pure SDK
+        (tmp_path / "AndroidManifest.xml").write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n<manifest package="com.test.app" />\n'
+        )
+        (tmp_path / "res").mkdir()
+        (tmp_path / "res" / "values").mkdir(parents=True)
+        (tmp_path / "res" / "values" / "strings.xml").write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="app_name">Test</string>\n</resources>\n'
+        )
+        src_dir = tmp_path / "src" / "com" / "test" / "app"
+        src_dir.mkdir(parents=True)
+        (src_dir / "MainActivity.java").write_text(
+            "package com.test.app;\npublic class MainActivity {\n    public static void main(String[] args) {}\n}\n"
+        )
+        builder = PureSdkBuilder(str(tmp_path))
+        assert builder.validate_project() is True
+
+    def test_validate_project_fails_without_src(self, tmp_path):
+        from pure_sdk_builder import PureSdkBuilder
+        (tmp_path / "AndroidManifest.xml").write_text('<manifest package="com.test" />\n')
+        builder = PureSdkBuilder(str(tmp_path))
+        assert builder.validate_project() is False
+
+    def test_find_java_files(self, tmp_path):
+        from pure_sdk_builder import PureSdkBuilder
+        src_dir = tmp_path / "src" / "com" / "test"
+        src_dir.mkdir(parents=True)
+        (src_dir / "Test.java").write_text("package com.test; class Test {}")
+        (src_dir / "Util.java").write_text("package com.test; class Util {}")
+        builder = PureSdkBuilder(str(tmp_path))
+        files = builder.find_java_files()
+        assert len(files) == 2
+        assert all(f.endswith(".java") for f in files)
+
+    def test_cleanup(self, tmp_path):
+        from pure_sdk_builder import PureSdkBuilder
+        builder = PureSdkBuilder(str(tmp_path))
+        builder.cleanup()
+        assert builder.build_dir.exists()
+
+    def test_detect_project_type_pure_sdk(self, tmp_path):
+        """Verifica que detect_project_type reconhece projeto Pure SDK."""
+        from flutter_orchestrator import FlutterBuildOrchestrator
+        (tmp_path / "AndroidManifest.xml").write_text('<manifest package="com.test" />\n')
+        (tmp_path / "res").mkdir()
+        (tmp_path / "src").mkdir()
+        project_type = FlutterBuildOrchestrator.detect_project_type(tmp_path)
+        assert project_type == "android_pure_sdk", f"Esperado android_pure_sdk, obtido {project_type}"
+
+    def test_detect_project_type_still_detects_flutter(self, tmp_path):
+        """Verifica que detect_project_type ainda detecta Flutter corretamente."""
+        from flutter_orchestrator import FlutterBuildOrchestrator
+        (tmp_path / "pubspec.yaml").write_text("name: test\n")
+        project_type = FlutterBuildOrchestrator.detect_project_type(tmp_path)
+        assert project_type == "flutter"
+
+    def test_detect_project_type_still_detects_android_gradle(self, tmp_path):
+        """Verifica que detect_project_type ainda detecta Android Gradle."""
+        from flutter_orchestrator import FlutterBuildOrchestrator
+        (tmp_path / "settings.gradle").write_text('rootProject.name = "test"\n')
+        project_type = FlutterBuildOrchestrator.detect_project_type(tmp_path)
+        assert project_type == "android"
+
+    def test_validate_pure_sdk_project_method(self, tmp_path):
+        """Verifica que validate_pure_sdk_project() funciona."""
+        from flutter_orchestrator import FlutterBuildOrchestrator
+        (tmp_path / "AndroidManifest.xml").write_text('<manifest package="com.test" />\n')
+        (tmp_path / "res").mkdir()
+        (tmp_path / "res" / "values").mkdir(parents=True)
+        (tmp_path / "res" / "values" / "strings.xml").write_text(
+            '<?xml version="1.0"?>\n<resources><string name="app_name">T</string></resources>\n'
+        )
+        src_dir = tmp_path / "src" / "com" / "test"
+        src_dir.mkdir(parents=True)
+        (src_dir / "Main.java").write_text("package com.test; class Main {}")
+        orch = FlutterBuildOrchestrator(project_path=str(tmp_path))
+        assert orch.validate_pure_sdk_project() is True
+
+    def test_capture_last_build_error_exists(self, tmp_path):
+        """Verifica que _capture_last_build_error e um metodo valido."""
+        from flutter_orchestrator import FlutterBuildOrchestrator
+        orch = FlutterBuildOrchestrator(project_path=str(tmp_path))
+        assert hasattr(orch, '_capture_last_build_error')
+        result = orch._capture_last_build_error()
+        assert result is None  # Sem logs de build, retorna None

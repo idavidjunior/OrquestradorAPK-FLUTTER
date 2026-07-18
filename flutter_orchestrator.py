@@ -29,7 +29,6 @@ from urllib.parse import urlparse
 from orchestrator.timeout_manager import AdaptiveTimeoutManager
 from orchestrator.ia_response_validator import IAResponseValidator
 from orchestrator.model_manager import IntelligentModelManager
-from orchestrator.kotlin_fixer import KotlinGradleFixer
 from orchestrator.knowledge_base_learner import KnowledgeBaseLearner
 from consolidate_build_pipeline import BuildPipelineArchitecture, BuildFixer
 
@@ -219,6 +218,11 @@ class FlutterBuildOrchestrator:
         self._ai_context = []
         self._project_profile = {"packages": [], "errors_seen": [], "fixes_applied": []}
 
+        self._java_path = None
+
+        # Tipo do projeto: 'flutter', 'android', ou 'unknown'
+        self.project_type = FlutterBuildOrchestrator.detect_project_type(self.project_path)
+
         # Novos gerenciadores modulares
         self._timeout_manager = AdaptiveTimeoutManager()
         self._response_validator = IAResponseValidator()
@@ -267,6 +271,28 @@ class FlutterBuildOrchestrator:
             pass
         return None
 
+    @classmethod
+    def detect_project_type(cls, project_path: Path) -> str:
+        """Detecta o tipo de projeto.
+        Retorna 'flutter', 'android', 'android_pure_sdk', ou 'unknown'."""
+        path = Path(project_path).resolve()
+        # 1. Flutter: pubspec.yaml na raiz
+        if (path / "pubspec.yaml").exists():
+            return "flutter"
+        # 2. Android Gradle: settings.gradle(.kts) na raiz
+        if (path / "settings.gradle.kts").exists() or (path / "settings.gradle").exists():
+            return "android"
+        # 3. Android Pure SDK: AndroidManifest.xml + res/ + src/ sem Gradle
+        has_manifest = (path / "AndroidManifest.xml").exists()
+        has_res = (path / "res").is_dir()
+        has_src = (path / "src").is_dir()
+        if has_manifest and has_res and has_src:
+            return "android_pure_sdk"
+        # 4. Fallback Gradle: app/build.gradle(.kts) existe mesmo sem settings
+        if (path / "app" / "build.gradle.kts").exists() or (path / "app" / "build.gradle").exists():
+            return "android"
+        return "unknown"
+
     # ── Logging ────────────────────────────────────────────────────────
 
     def log(self, message: str, level: str = "INFO"):
@@ -285,9 +311,63 @@ class FlutterBuildOrchestrator:
 
     # ── Prerequisites ──────────────────────────────────────────────────
 
+    def _find_java(self) -> Optional[str]:
+        """Localiza java.exe em locais comuns do sistema."""
+        java_home = os.environ.get("JAVA_HOME", "")
+        if java_home:
+            j = Path(java_home) / "bin" / "java.exe"
+            if j.exists():
+                return str(j)
+        try:
+            r = subprocess.run(["where", "java"], capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip().splitlines()[0]
+        except Exception:
+            pass
+        candidates = [
+            Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Microsoft" / "jdk-17.0.19.10-hotspot" / "bin" / "java.exe",
+            Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Android" / "Android Studio" / "jbr" / "bin" / "java.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "Android" / "Android Studio" / "jbr" / "bin" / "java.exe",
+        ]
+        for c in candidates:
+            if c.exists():
+                return str(c)
+        return None
+
     def check_prerequisites(self) -> bool:
         self.log("Verificando pr\u00e9-requisitos...", "STEP")
         all_ok = True
+
+        # Projeto Android puro: so precisa de Java, nao de Flutter nem Git
+        if self.project_type == "android":
+            java = self._find_java()
+            if not java:
+                self.log("Java n\u00e3o encontrado (necess\u00e1rio para build Android)", "ERROR")
+                return False
+            try:
+                result = subprocess.run(
+                    [java, "-version"],
+                    capture_output=True, text=True, timeout=30
+                )
+                if result.returncode == 0:
+                    v = result.stderr.split("\n")[0]
+                    self.log(f"Java: {v}", "SUCCESS")
+                    self._java_path = java
+                    return True
+                raise Exception("java -version falhou")
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+                self.log(f"Java n\u00e3o responde: {e}", "ERROR")
+                return False
+
+        # Android Pure SDK: verifica SDK tools + JDK
+        if self.project_type == "android_pure_sdk":
+            from pure_sdk_builder import PureSdkBuilder
+            builder = PureSdkBuilder(str(self.project_path))
+            all_ok = builder.check_tools()
+            # Atualiza java_path para uso posterior
+            if builder._java:
+                self._java_path = builder._java
+            return all_ok
 
         # Flutter — loop em vez de recursão para evitar estouro de pilha
         for _ in range(3):
@@ -329,19 +409,20 @@ class FlutterBuildOrchestrator:
             all_ok = False
 
         # Java
-        try:
-            result = subprocess.run(
-                ["java", "-version"],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode == 0:
-                v = result.stderr.split("\n")[0]
-                self.log(f"Java: {v}", "SUCCESS")
-            else:
-                raise Exception("java -version falhou")
-        except FileNotFoundError:
-            warn = "Java n\u00e3o encontrado (necess\u00e1rio para build Android)"
-            self.log(warn, "WARNING")
+        java = self._find_java()
+        if not java:
+            self.log("Java n\u00e3o encontrado (necess\u00e1rio para build Android)", "WARNING")
+        else:
+            try:
+                result = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=30)
+                if result.returncode == 0:
+                    v = result.stderr.split("\n")[0]
+                    self.log(f"Java: {v}", "SUCCESS")
+                    self._java_path = java
+                else:
+                    raise Exception("java -version falhou")
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+                self.log(f"Java n\u00e3o responde: {e}", "WARNING")
 
         return all_ok
 
@@ -400,7 +481,7 @@ class FlutterBuildOrchestrator:
                 ) if os.name == "nt" else "$HOME/Android/Sdk"
             local_props.write_text(
                 f"sdk.dir={sdk_path}\n"
-                f"flutter.sdk={flutter_sdk}\n"
+                f"flutter.sdk={flutter_sdk.replace(chr(92), '/')}\n"
                 f"flutter.buildMode=release\n"
                 f"flutter.versionName=1.0.0\n"
                 f"flutter.versionCode=1\n",
@@ -479,6 +560,38 @@ class FlutterBuildOrchestrator:
         self._validate_and_fix_pubspec(pubspec)
         return True
 
+    def validate_android_project(self) -> bool:
+        self.log("Validando projeto Android...", "STEP")
+        settings = self.project_path / "settings.gradle.kts"
+        if not settings.exists():
+            settings = self.project_path / "settings.gradle"
+        if not settings.exists():
+            self.log("settings.gradle(.kts) nao encontrado", "ERROR")
+            return False
+        self.log(f"settings.gradle encontrado", "SUCCESS")
+
+        app_bg = self.project_path / "app" / "build.gradle.kts"
+        if not app_bg.exists():
+            app_bg = self.project_path / "app" / "build.gradle"
+        if not app_bg.exists():
+            self.log("app/build.gradle(.kts) nao encontrado", "ERROR")
+            return False
+        self.log("app/build.gradle encontrado", "SUCCESS")
+
+        manifest = self.project_path / "app" / "src" / "main" / "AndroidManifest.xml"
+        if not manifest.exists():
+            self.log("AndroidManifest.xml nao encontrado", "WARNING")
+        else:
+            self.log("AndroidManifest.xml encontrado", "SUCCESS")
+
+        wrapper = self.project_path / "gradle" / "wrapper" / "gradle-wrapper.properties"
+        if not wrapper.exists():
+            self.log("gradle-wrapper.properties nao encontrado", "WARNING")
+        else:
+            self.log("Gradle wrapper encontrado", "SUCCESS")
+
+        return True
+
     def _validate_and_fix_pubspec(self, pubspec_path: Path):
         """Valida e corrige erros de sintaxe no pubspec.yaml."""
         try:
@@ -544,6 +657,12 @@ class FlutterBuildOrchestrator:
         return True
 
     # ── Dependencies ───────────────────────────────────────────────────
+
+    def validate_pure_sdk_project(self) -> bool:
+        self.log("Validando projeto Android Pure SDK...", "STEP")
+        from pure_sdk_builder import PureSdkBuilder
+        builder = PureSdkBuilder(str(self.project_path))
+        return builder.validate_project()
 
     def get_dependencies(self) -> bool:
         self.log("Instalando depend\u00eancias...", "STEP")
@@ -617,6 +736,13 @@ class FlutterBuildOrchestrator:
     def build_apk(self, release: bool = True,
                   build_number: Optional[str] = None,
                   _skip_gradle_check: bool = False) -> bool:
+        # Para projetos Android Pure SDK, usa pipeline aapt+java+d8
+        if self.project_type == "android_pure_sdk":
+            return self._build_pure_sdk_apk(release, build_number)
+        # Para projetos Android Gradle, usa gradlew diretamente
+        if self.project_type == "android":
+            return self._build_android_apk(release, build_number)
+        # Para projetos Flutter (padrao), usa flutter build apk
         mode = "release" if release else "debug"
         self.log("Compilando APK (" + mode + ")", "STEP")
         self._progress(65, "Compilando APK (" + mode + ") - configurando Gradle...")
@@ -637,6 +763,21 @@ class FlutterBuildOrchestrator:
                     self.log(f"[PRE-BUILD] {', '.join(pre_fixer.fixes_applied)}", "INFO")
             except Exception as pre_e:
                 self.log(f"[PRE-BUILD] {pre_e}", "DEBUG")
+            # Pre-build: verifica integridade da estrutura Android (settings.gradle[.kts] + wrapper)
+            android_dir = self.project_path / "android"
+            settings_gradle = android_dir / "settings.gradle"
+            settings_gradle_kts = android_dir / "settings.gradle.kts"
+            wrapper_props = android_dir / "gradle" / "wrapper" / "gradle-wrapper.properties"
+            if not (settings_gradle.exists() or settings_gradle_kts.exists()) or not wrapper_props.exists():
+                self.log("[PRE-BUILD] Estrutura Android incompleta — recriando...", "INFO")
+                try:
+                    from consolidate_build_pipeline import BuildFixer
+                    struct_fixer = BuildFixer(str(self.project_path))
+                    if struct_fixer.apply_fix("fix_unsupported_gradle"):
+                        self.log("[PRE-BUILD] Estrutura Android recriada com sucesso", "SUCCESS")
+                    self.log("[PRE-BUILD] Estrutura recriada, prosseguindo...", "INFO")
+                except Exception as struct_e:
+                    self.log(f"[PRE-BUILD] Falha na recriacao estrutural: {struct_e}", "WARNING")
             result = subprocess.run(
                 cmd, cwd=self.project_path,
                 capture_output=True, text=True, timeout=1800
@@ -644,43 +785,15 @@ class FlutterBuildOrchestrator:
             if result.returncode == 0:
                 self.log("APK compilado com sucesso", "SUCCESS")
                 return True
-            stderr = result.stderr[:2000]
+            # Salva stderr completo para debug
+            stderr = result.stderr
+            try:
+                out_dir = Path(self.output_dir)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                (out_dir / "stderr_full.log").write_text(stderr, encoding='utf-8')
+            except Exception:
+                pass
             self.log(f"Erro: {stderr[:300]}...", "ERROR")
-
-            # Auto-retry com flag de Gradle se erro for vers\u00e3o do Gradle ou KGP
-            if not _skip_gradle_check and (
-                "Gradle version" in stderr
-                or "gradle" in stderr.lower()
-                or "applies Kotlin Gradle Plugin" in stderr
-                or "applies KGP" in stderr
-            ):
-                self.log(
-                    "Tentando novamente com "
-                    "--android-skip-build-dependency-validation...",
-                    "INFO"
-                )
-                # Tamb\u00e9m aplica fix no settings.gradle para KGP
-                self._fix_kgp_in_settings()
-                # Usa KotlinGradleFixer para correcoes adicionais
-                try:
-                    kgp_fixer = KotlinGradleFixer(str(self.project_path))
-                    fix_result = kgp_fixer.apply_fixes()
-                    if fix_result['success']:
-                        self.log(f"KotlinGradleFixer: {len(fix_result['fixes_applied'])} correcoes aplicadas", "SUCCESS")
-                        try:
-                            kb_learner = KnowledgeBaseLearner()
-                            kb_learner.learn_from_build(
-                                build_log=stderr, error=stderr,
-                                solution="KotlinGradleFixer: remove .kts + recria build.gradle",
-                                success=True
-                            )
-                            self.log("[KB] Solucao Kotlin registrada na KnowledgeBase.", "SUCCESS")
-                        except Exception as kbe:
-                            self.log(f"[KB] Erro ao registrar: {kbe}", "DEBUG")
-                except Exception as kgp_e:
-                    self.log(f"KotlinGradleFixer: {kgp_e}", "WARNING")
-                return self.build_apk(release, build_number,
-                                      _skip_gradle_check=True)
 
             # Correcao estrutural para 'unsupported Gradle project'
             if "unsupported Gradle" in stderr or "Gradle project" in stderr:
@@ -690,7 +803,6 @@ class FlutterBuildOrchestrator:
                 if struct_fixer.apply_fix("fix_unsupported_gradle"):
                     self.log("Estrutura android recriada, retentando build...", "SUCCESS")
                     try:
-                        from orchestrator.knowledge_base_learner import KnowledgeBaseLearner
                         KnowledgeBaseLearner().learn_from_build(stderr, stderr, "fix_unsupported_gradle", True)
                     except Exception:
                         pass
@@ -709,51 +821,296 @@ class FlutterBuildOrchestrator:
             self.log(f"Erro: {e}", "ERROR")
             return False
 
-    def _fix_kgp_in_settings(self):
-        """Corrige settings.gradle para plugins que aplicam KGP (Kotlin Gradle Plugin)."""
+    def _extract_gradle_version(self, wrapper_props: Path) -> str:
+        """Extrai a versao do Gradle do distributionUrl nas wrapper properties."""
         try:
-            sg = self.project_path / "android" / "settings.gradle"
-            if not sg.exists():
-                return False
-            text = sg.read_text(encoding="utf-8")
-            marker = "resolutionStrategy"
-            if marker in text:
-                return False
-            ktl_version = "2.1.0"
-            try:
-                from gui.app import BuildOrchestratorGUI
-                versions = BuildOrchestratorGUI._get_template_versions()
-                ktl_version = versions.get("kotlin", "2.1.0")
-            except Exception:
-                pass
-            resolution_block = (
-                "\n    resolutionStrategy {\n"
-                "        eachPlugin {\n"
-                '            if (requested.id.id == "org.jetbrains.kotlin.android") {\n'
-                "                useVersion \"" + ktl_version + "\"\n"
-                "            }\n"
-                "        }\n"
-                "    }\n"
+            content = wrapper_props.read_text(encoding="utf-8")
+            m = re.search(r'gradle-([\d.]+)-bin\.zip', content)
+            if m:
+                return m.group(1)
+        except Exception:
+            pass
+        return "8.2"
+
+    def _generate_gradle_wrapper(self, wrapper_dir: Path):
+        """Gera gradlew.bat, gradlew e baixa gradle-wrapper.jar."""
+        wrapper_dir.mkdir(parents=True, exist_ok=True)
+        project_root = wrapper_dir.parent.parent
+
+        wrapper_props = wrapper_dir / "gradle-wrapper.properties"
+        gradle_version = self._extract_gradle_version(wrapper_props)
+
+        # gradlew.bat
+        gradlew_bat = project_root / "gradlew.bat"
+        if not gradlew_bat.exists():
+            gradlew_bat.write_text(
+                '@rem Gradle startup script for Windows\n'
+                '@if "%DEBUG%"=="" @echo off\n'
+                'set DIRNAME=%~dp0\n'
+                'if "%DIRNAME%"=="" set DIRNAME=.\n'
+                'set APP_BASE_NAME=%~n0\n'
+                'set APP_HOME=%DIRNAME%\n'
+                'set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"\n'
+                'set JAVA_EXE=java.exe\n'
+                '%JAVA_EXE% -version >NUL 2>&1\n'
+                'if %ERRORLEVEL% equ 0 goto execute\n'
+                'echo ERROR: JAVA_HOME is not set.\n'
+                'goto fail\n'
+                ':execute\n'
+                'set CLASSPATH=%APP_HOME%gradle\\wrapper\\gradle-wrapper.jar\n'
+                '"%JAVA_EXE%" %DEFAULT_JVM_OPTS% -classpath "%CLASSPATH%" '
+                'org.gradle.wrapper.GradleWrapperMain %*\n'
+                'if %ERRORLEVEL% equ 0 goto end\n'
+                ':fail\n'
+                'exit /b 1\n'
+                ':end\n'
+                'exit /b 0\n',
+                encoding='utf-8'
             )
-            insert_pos = text.find("repositories {")
-            if insert_pos < 0:
+        # gradlew (Unix)
+        gradlew_sh = project_root / "gradlew"
+        if not gradlew_sh.exists():
+            gradlew_sh.write_text(
+                '#!/bin/sh\n'
+                'DIRNAME="$(dirname "$0")"\n'
+                'APP_HOME="$DIRNAME"\n'
+                'CLASSPATH="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"\n'
+                'java -Xmx64m -Xms64m -classpath "$CLASSPATH" '
+                'org.gradle.wrapper.GradleWrapperMain "$@"\n',
+                encoding='utf-8'
+            )
+        # wrapper properties
+        if not wrapper_props.exists():
+            wrapper_props.write_text(
+                "distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\n"
+                "distributionUrl=https\\://services.gradle.org/distributions/"
+                f"gradle-{gradle_version}-bin.zip\n"
+                "zipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n",
+                encoding="utf-8"
+            )
+        # gradle-wrapper.jar
+        wrapper_jar = wrapper_dir / "gradle-wrapper.jar"
+        if not wrapper_jar.exists():
+            urls_to_try = [
+                f"https://raw.githubusercontent.com/gradle/gradle/v{gradle_version}.0/gradle/wrapper/gradle-wrapper.jar",
+                "https://raw.githubusercontent.com/gradle/gradle/main/gradle/wrapper/gradle-wrapper.jar",
+            ]
+            for jar_url in urls_to_try:
+                try:
+                    req = Request(jar_url, headers={"User-Agent": "FlutterOrchestrator/1.0"})
+                    with urlopen(req, timeout=30) as r:
+                        wrapper_jar.write_bytes(r.read())
+                    self.log(f"gradle-wrapper.jar baixado ({wrapper_jar.stat().st_size} bytes)", "SUCCESS")
+                    break
+                except Exception:
+                    continue
+            else:
+                self.log("Baixando gradle-wrapper.jar do distribution zip...", "INFO")
+                try:
+                    dist_url = f"https://services.gradle.org/distributions/gradle-{gradle_version}-bin.zip"
+                    req = Request(dist_url, headers={"User-Agent": "FlutterOrchestrator/1.0"})
+                    with urlopen(req, timeout=120) as r:
+                        data = r.read()
+                    import zipfile, io
+                    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                        for name in zf.namelist():
+                            if name.endswith("gradle-wrapper.jar"):
+                                wrapper_jar.write_bytes(zf.read(name))
+                                self.log(f"gradle-wrapper.jar extraido ({len(zf.read(name))} bytes)", "SUCCESS")
+                                break
+                except Exception as e:
+                    self.log(f"Falha ao baixar gradle-wrapper.jar: {e}", "WARNING")
+
+    def _ensure_gradlew(self) -> Optional[Path]:
+        """Retorna o caminho para gradlew (.bat no Windows)."""
+        gradlew_bat = self.project_path / "gradlew.bat"
+        gradlew_sh = self.project_path / "gradlew"
+        wrapper_dir = self.project_path / "gradle" / "wrapper"
+        wrapper_jar = wrapper_dir / "gradle-wrapper.jar"
+        wrapper_props = wrapper_dir / "gradle-wrapper.properties"
+
+        # So retorna se tiver script + properties + jar (os tres essenciais)
+        if (gradlew_bat.exists() or gradlew_sh.exists()) and wrapper_props.exists() and wrapper_jar.exists():
+            return gradlew_bat if gradlew_bat.exists() else gradlew_sh
+
+        self.log("Gradle wrapper incompleto — regenerando...", "INFO")
+        # Remove scripts antigos para forcar regeneracao se jar faltar
+        if not wrapper_jar.exists():
+            for f in [gradlew_bat, gradlew_sh]:
+                if f.exists():
+                    f.unlink()
+        try:
+            self._generate_gradle_wrapper(wrapper_dir)
+        except Exception as e:
+            self.log(f"Erro ao gerar wrapper: {e}", "ERROR")
+            return None
+
+        if gradlew_bat.exists():
+            return gradlew_bat
+        if gradlew_sh.exists():
+            return gradlew_sh
+        self.log("Nao foi possivel gerar gradlew.bat/gradlew", "ERROR")
+        return None
+
+    @staticmethod
+    def _find_sdk_tool(name: str) -> Optional[str]:
+        """Procura ferramenta do Android SDK build-tools (apksigner, zipalign)."""
+        sdk = (os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or
+               str(Path(os.environ.get("LOCALAPPDATA", "C:\\")) / "Android" / "Sdk"))
+        bt_dir = Path(sdk) / "build-tools"
+        if not bt_dir.exists():
+            return None
+        versions = sorted(bt_dir.iterdir(), reverse=True)
+        for v in versions:
+            for ext in ["", ".exe", ".bat"]:
+                tool = v / f"{name}{ext}"
+                if tool.exists():
+                    return str(tool)
+        return None
+
+    def _sign_apk(self):
+        """Assina APK release com apksigner (SDK) + debug keystore (V1+V2+V3, alignment correto)."""
+        apk_dir = self.project_path / "app" / "build" / "outputs" / "apk" / "release"
+        candidates = list(apk_dir.glob("*unsigned*.apk")) if apk_dir.exists() else []
+        if not candidates:
+            return False
+        unsigned_apk = candidates[0]
+
+        env = os.environ.copy()
+        if self._java_path:
+            env["JAVA_HOME"] = str(Path(self._java_path).parent.parent)
+
+        # Debug keystore
+        keystore = Path.home() / ".android" / "debug.keystore"
+        if not keystore.exists():
+            self.log("Debug keystore nao encontrado — criando...", "INFO")
+            try:
+                subprocess.run(
+                    ["keytool", "-genkey", "-v", "-keystore", str(keystore),
+                     "-alias", "androiddebugkey", "-storepass", "android",
+                     "-keypass", "android", "-keyalg", "RSA", "-validity", "365",
+                     "-dname", "CN=Android Debug, OU=Android, O=Android, L=Unknown, ST=Unknown, C=US"],
+                    capture_output=True, text=True, timeout=30, env=env
+                )
+            except Exception as e:
+                self.log(f"Falha ao criar keystore: {e}", "WARNING")
                 return False
-            indent = ""
-            line_start = text.rfind("\n", 0, insert_pos)
-            if line_start >= 0:
-                indent = text[line_start + 1:insert_pos]
-            indented_block = ""
-            for line in resolution_block.split("\n"):
-                if line.strip():
-                    indented_block += indent + line + "\n"
+
+        try:
+            # Tenta apksigner (V1+V2+V3, alignment automatico)
+            apksigner = self._find_sdk_tool("apksigner")
+            if apksigner:
+                subprocess.run(
+                    [apksigner, "sign", "--ks", str(keystore),
+                     "--ks-pass", "pass:android", "--ks-key-alias", "androiddebugkey",
+                     str(unsigned_apk)],
+                    capture_output=True, text=True, timeout=120
+                )
+                self.log(f"APK assinado via apksigner", "SUCCESS")
+            else:
+                # Fallback: zipalign + jarsigner
+                self.log("apksigner nao encontrado — usando zipalign + jarsigner", "INFO")
+                zipalign = self._find_sdk_tool("zipalign")
+                if zipalign:
+                    aligned = unsigned_apk.parent / unsigned_apk.name.replace("-unsigned", "-aligned")
+                    subprocess.run(
+                        [zipalign, "-p", "-f", "4", str(unsigned_apk), str(aligned)],
+                        capture_output=True, text=True, timeout=30
+                    )
+                    apk_to_sign = aligned
                 else:
-                    indented_block += "\n"
-            text = text[:insert_pos] + indented_block + text[insert_pos:]
-            sg.write_text(text, encoding="utf-8")
-            self.log("settings.gradle corrigido para compatibilidade KGP", "SUCCESS")
+                    apk_to_sign = unsigned_apk
+                subprocess.run(
+                    ["jarsigner", "-keystore", str(keystore),
+                     "-storepass", "android", "-keypass", "android",
+                     "-sigalg", "SHA256withRSA", "-digestalg", "SHA-256",
+                     str(apk_to_sign), "androiddebugkey"],
+                    capture_output=True, text=True, timeout=30, env=env
+                )
+                if apk_to_sign != unsigned_apk:
+                    final = unsigned_apk.parent / unsigned_apk.name.replace("-unsigned", "")
+                    apk_to_sign.rename(final)
+                    if unsigned_apk.exists():
+                        unsigned_apk.unlink()
+                    apk_to_sign = final
+                else:
+                    apk_to_sign.rename(unsigned_apk.parent / unsigned_apk.name.replace("-unsigned", ""))
+
+            # Renomeia para app-release.apk (apksigner assina in-place)
+            final_path = unsigned_apk.parent / unsigned_apk.name.replace("-unsigned", "")
+            if unsigned_apk.exists() and unsigned_apk.name != final_path.name:
+                unsigned_apk.rename(final_path)
+            self.log(f"APK assinado: {final_path.name}", "SUCCESS")
             return True
         except Exception as e:
-            self.log(f"Erro ao corrigir settings.gradle: {e}", "WARNING")
+            self.log(f"Falha ao assinar APK: {e}", "WARNING")
+            return False
+
+    def _build_pure_sdk_apk(self, release: bool = True,
+                             build_number: Optional[str] = None) -> bool:
+        """Build Android APK usando pipeline Pure SDK (aapt + javac + jar + d8 + apksigner)."""
+        self.log("Compilando APK Android (Pure SDK)...", "STEP")
+        self._progress(65, "Compilando APK Pure SDK...")
+        from pure_sdk_builder import PureSdkBuilder
+        try:
+            builder = PureSdkBuilder(
+                str(self.project_path),
+                log_callback=self.log,
+                progress_callback=lambda p, s: self._progress(65 + p // 4, s),
+            )
+            ok = builder.build()
+            if ok and builder.last_apk_path:
+                self.last_apk_path = builder.last_apk_path
+                self.log(f"APK Pure SDK gerado: {builder.last_apk_path}", "SUCCESS")
+            return ok
+        except Exception as e:
+            self.log(f"Erro no build Pure SDK: {e}", "ERROR")
+            return False
+
+    def _build_android_apk(self, release: bool, build_number: Optional[str] = None) -> bool:
+        mode = "release" if release else "debug"
+        self.log(f"Compilando APK Android ({mode}) via gradlew...", "STEP")
+        self._progress(65, f"Compilando APK Android ({mode})...")
+
+        gradlew = self._ensure_gradlew()
+        if not gradlew:
+            return False
+
+        cmd = [str(gradlew), f"assemble{mode.capitalize()}"]
+        if build_number:
+            cmd.extend(["-PversionCode", build_number])
+
+        env = os.environ.copy()
+        if self._java_path:
+            java_home = str(Path(self._java_path).parent.parent)
+            env["JAVA_HOME"] = java_home
+
+        self.log(f"Executando: {' '.join(cmd)}", "INFO")
+        try:
+            result = subprocess.run(
+                cmd, cwd=self.project_path, env=env,
+                capture_output=True, text=True, timeout=1800
+            )
+            if result.returncode == 0:
+                self.log(f"APK compilado com sucesso (assemble{mode.capitalize()})", "SUCCESS")
+                # Para release, assina com debug keystore se estiver unsigned
+                if release:
+                    self._sign_apk()
+                return True
+            stderr = result.stderr
+            try:
+                out_dir = Path(self.output_dir)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                (out_dir / "stderr_full.log").write_text(stderr, encoding='utf-8')
+            except Exception:
+                pass
+            self.log(f"Erro Gradle: {stderr[:300]}...", "ERROR")
+            return False
+        except subprocess.TimeoutExpired:
+            self.log("Timeout na compilacao Gradle", "ERROR")
+            return False
+        except Exception as e:
+            self.log(f"Erro inesperado: {e}", "ERROR")
             return False
 
     # ── Artifacts ──────────────────────────────────────────────────────
@@ -858,27 +1215,84 @@ class FlutterBuildOrchestrator:
         self._pre_build_ai_scan()
         return True
 
+    def _get_project_name(self) -> str:
+        """Extrai nome do projeto de settings.gradle ou pubspec.yaml ou nome da pasta."""
+        for fname in ["settings.gradle.kts", "settings.gradle"]:
+            f = self.project_path / fname
+            if f.exists():
+                m = re.search(r"""rootProject\.name\s*=\s*['"]([^'"]+)['"]""", f.read_text(encoding="utf-8", errors="ignore"))
+                if m:
+                    return m.group(1)
+        pubspec = self.project_path / "pubspec.yaml"
+        if pubspec.exists():
+            m = re.search(r"^name:\s*(\S+)", pubspec.read_text(encoding="utf-8", errors="ignore"), re.M)
+            if m:
+                return m.group(1)
+        return self.project_path.name
+
+    def _get_app_version(self) -> str:
+        """Extrai versionName do app/build.gradle ou app/build.gradle.kts."""
+        for fname in ["app/build.gradle.kts", "app/build.gradle"]:
+            f = self.project_path / fname
+            if f.exists():
+                m = re.search(r"""versionName\s+['\"]([^'\"]+)['\"]""", f.read_text(encoding="utf-8", errors="ignore"))
+                if m:
+                    return m.group(1)
+        return "1.0.0"
+
     def copy_artifacts(self) -> Optional[Path]:
         self.log("Copiando artifacts...", "STEP")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         candidates = []
+        # Caminhos Flutter: build/app/outputs/flutter-apk/ ou build/app/outputs/apk/
         for subdir in ["flutter-apk", "apk"]:
             search = self.project_path / "build" / "app" / "outputs" / subdir
             if search.exists():
                 candidates.extend(search.rglob("*.apk"))
+        # Caminhos Android puro: app/build/outputs/apk/debug/ ou app/build/outputs/apk/release/
+        for subdir in ["debug", "release"]:
+            search = self.project_path / "app" / "build" / "outputs" / "apk" / subdir
+            if search.exists():
+                candidates.extend(search.rglob("*.apk"))
+        # Caminho Android Pure SDK: build_pure/
+        pure_dir = self.project_path / "build_pure"
+        if pure_dir.exists():
+            candidates.extend(pure_dir.glob("*.apk"))
 
         if not candidates:
             self.log("APK n\u00e3o encontrado ap\u00f3s build", "ERROR")
             return None
 
+        # Prefer APKs that are signed (not -unsigned)
+        signed = [p for p in candidates if "-unsigned" not in p.name.lower()]
+        selected = signed if signed else candidates
         apk_path = sorted(
-            candidates, key=lambda p: p.stat().st_mtime, reverse=True
+            selected, key=lambda p: p.stat().st_mtime, reverse=True
         )[0]
         self.log(f"APK: {apk_path.name}", "SUCCESS")
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = self.output_dir / f"app_{timestamp}.apk"
+        # Nome versionado: {projeto}_v{versao}.apk
+        proj_name = self._get_project_name()
+        version = self._get_app_version()
+        output_name = f"{proj_name}_v{version}.apk"
+        output_path = self.output_dir / output_name
+
+        # Se ja existe um APK com esse nome, move o atual para archive/
+        if output_path.exists():
+            archive_dir = self.output_dir / "archive"
+            archive_dir.mkdir(exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archived = archive_dir / f"{output_path.stem}_{ts}.apk"
+            shutil.move(str(output_path), str(archived))
+            self.log(f"Versao anterior arquivada: {archived.name}", "INFO")
+
+            # Mantém só as 2 versões mais recentes no archive
+            archived_apks = sorted(archive_dir.glob("*.apk"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for velho in archived_apks[2:]:
+                velho.unlink()
+                self.log(f"Versao antiga removida: {velho.name}", "INFO")
+
         shutil.copy2(apk_path, output_path)
         self.last_apk_path = output_path
         self.log(f"Copiado: {output_path}", "SUCCESS")
@@ -908,6 +1322,8 @@ class FlutterBuildOrchestrator:
                     round(apk_path.stat().st_size / (1024 * 1024), 2)
                     if apk_path and apk_path.exists() else None
                 ),
+                "project_name": self._get_project_name(),
+                "version": self._get_app_version(),
             },
             "build_log": self.build_log,
         }
@@ -1452,6 +1868,15 @@ class FlutterBuildOrchestrator:
         if not errors.strip():
             return False
 
+        # Erro estrutural: "unsupported Gradle" — corrige sem passar por KB/IA
+        if "unsupported Gradle" in errors or "Gradle project" in errors:
+            self.log("[FIX] Gradle incompativel — aplicando correcao estrutural direta...", "INFO")
+            fixer = BuildFixer(str(self.project_path))
+            if fixer.apply_fix("fix_unsupported_gradle"):
+                self.log("[FIX] Correcao estrutural aplicada, recompilando...", "SUCCESS")
+                return self._retry_build(release, build_number)
+            self.log("[FIX] Correcao estrutural falhou — continuando para KB/IA...", "WARNING")
+
         # Colete arquivos relevantes para contexto
         files = {}
         for key, path in [
@@ -1667,6 +2092,22 @@ class FlutterBuildOrchestrator:
             self.log(f"flutter analyze: {e}", "WARNING")
             return True  # se falhar, n\u00e3o bloqueia
 
+    def _capture_last_build_error(self) -> Optional[str]:
+        """Captura a ultima saida de erro dos logs de build."""
+        try:
+            build_dir = self.project_path / "build"
+            if not build_dir.exists():
+                return None
+            logs = list(build_dir.rglob("*.log"))
+            if not logs:
+                return None
+            latest = max(logs, key=lambda p: p.stat().st_mtime)
+            text = latest.read_text(errors="ignore")
+            lines = [l for l in text.split("\n") if "error" in l.lower()]
+            return "\n".join(lines[-20:])[:2000] if lines else text[-2000:]
+        except Exception:
+            return None
+
     def _learn_from_failure(self, errors: str):
         """Persiste erro que a IA n\u00e3o conseguiu corrigir para an\u00e1lise futura."""
         if not self.kb_path:
@@ -1702,19 +2143,6 @@ class FlutterBuildOrchestrator:
             self.log("Falha registrada na KnowledgeBase para refer\u00eancia futura", "INFO")
         except Exception as e:
             self.log(f"Erro ao registrar falha: {e}", "WARNING")
-        try:
-            build_dir = self.project_path / "build"
-            if not build_dir.exists():
-                return None
-            logs = list(build_dir.rglob("*.log"))
-            if not logs:
-                return None
-            latest = max(logs, key=lambda p: p.stat().st_mtime)
-            text = latest.read_text(errors="ignore")
-            lines = [l for l in text.split("\n") if "error" in l.lower()]
-            return "\n".join(lines[-20:])[:2000] if lines else text[-2000:]
-        except Exception:
-            return None
 
     def _retry_build(self, release: bool,
                      build_number: Optional[str]) -> bool:
@@ -1943,25 +2371,43 @@ class FlutterBuildOrchestrator:
     def orchestrate(self, skip_tests: bool = False, debug: bool = False,
                     build_number: Optional[str] = None) -> bool:
         print(f"\n{Color.BOLD}{Color.CYAN}{'='*60}{Color.RESET}")
-        print(f"{Color.BOLD}{Color.CYAN}FLUTTER BUILD ORCHESTRATOR{Color.RESET}")
+        print(f"{Color.BOLD}{Color.CYAN}BUILD ORCHESTRATOR{Color.RESET}")
         print(f"{Color.BOLD}{Color.CYAN}{'='*60}{Color.RESET}\n")
 
         self.log(f"Projeto: {self.project_path}", "INFO")
         self.log(f"Output: {self.output_dir}", "INFO")
+        self.log(f"Tipo: {self.project_type}", "INFO")
 
-        steps = [
-            ("Pré-requisitos", lambda: self.check_prerequisites()),
-            ("Validação", lambda: self.validate_flutter_project()),
-            ("Auto-revisão do Orchestrator", lambda: self._ai_self_review()),
-            ("Dependências", lambda: self.get_dependencies()),
-            ("Correção pré-build",
-             lambda: self._apply_pre_build_fixes()),
-            ("Análise", lambda: self.analyze_code()),
-            ("Testes", lambda: self.run_tests(skip=skip_tests)),
-            ("Build APK",
-             lambda: self.build_apk(release=not debug, build_number=build_number)),
-            ("Artifacts", lambda: self.copy_artifacts()),
-        ]
+        if self.project_type == "android_pure_sdk":
+            steps = [
+                ("Pr\u00e9-requisitos", lambda: self.check_prerequisites()),
+                ("Valida\u00e7\u00e3o", lambda: self.validate_pure_sdk_project()),
+                ("Build APK",
+                 lambda: self.build_apk(release=not debug, build_number=build_number)),
+                ("Artifacts", lambda: self.copy_artifacts()),
+            ]
+        elif self.project_type == "android":
+            steps = [
+                ("Pr\u00e9-requisitos", lambda: self.check_prerequisites()),
+                ("Valida\u00e7\u00e3o", lambda: self.validate_android_project()),
+                ("Build APK",
+                 lambda: self.build_apk(release=not debug, build_number=build_number)),
+                ("Artifacts", lambda: self.copy_artifacts()),
+            ]
+        else:
+            steps = [
+                ("Pr\u00e9-requisitos", lambda: self.check_prerequisites()),
+                ("Valida\u00e7\u00e3o", lambda: self.validate_flutter_project()),
+                ("Auto-revis\u00e3o do Orchestrator", lambda: self._ai_self_review()),
+                ("Depend\u00eancias", lambda: self.get_dependencies()),
+                ("Corre\u00e7\u00e3o pr\u00e9-build",
+                 lambda: self._apply_pre_build_fixes()),
+                ("An\u00e1lise", lambda: self.analyze_code()),
+                ("Testes", lambda: self.run_tests(skip=skip_tests)),
+                ("Build APK",
+                 lambda: self.build_apk(release=not debug, build_number=build_number)),
+                ("Artifacts", lambda: self.copy_artifacts()),
+            ]
 
         apk_path = None
         total = len(steps)

@@ -4,6 +4,14 @@ build:
   gradle_version: 7.4.2
   kotlin_version: 1.9.22
   max_retries: 3
+  pure_sdk:
+    compile_sdk: 36
+    min_sdk: 21
+    target_sdk: 36
+    enable_zipalign: true
+    enable_apksigner: true
+    keystore_alias: androiddebugkey
+    build_dir: build_pure
 dependencies:
   version_overrides:
     just_audio: ^0.9.40

@@ -1,356 +1,356 @@
 {
-  "base_timeout": 30,
+  "base_timeout": 60,
   "history": [
     {
-      "timestamp": "2026-07-11T10:11:02.505700",
+      "timestamp": "2026-07-12T13:24:20.334581",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T10:50:00.312849",
+      "timestamp": "2026-07-12T13:24:20.369750",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T10:50:00.383700",
+      "timestamp": "2026-07-12T13:52:59.026582",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T11:43:44.464325",
+      "timestamp": "2026-07-12T13:52:59.049387",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T11:43:44.510179",
+      "timestamp": "2026-07-12T14:28:01.398924",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T11:44:43.002966",
+      "timestamp": "2026-07-12T14:28:01.430224",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T11:44:43.032149",
+      "timestamp": "2026-07-12T14:29:21.964699",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T12:14:00.093578",
+      "timestamp": "2026-07-12T14:29:21.994935",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T12:14:00.130958",
+      "timestamp": "2026-07-12T14:45:21.312038",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T12:44:43.065238",
+      "timestamp": "2026-07-12T14:45:21.344578",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T12:44:43.104991",
+      "timestamp": "2026-07-12T14:46:33.160214",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T12:57:36.658387",
+      "timestamp": "2026-07-12T14:46:33.181533",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T12:57:36.706617",
+      "timestamp": "2026-07-12T14:50:18.146717",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T13:26:51.067985",
+      "timestamp": "2026-07-12T14:50:18.169688",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T13:26:51.108496",
+      "timestamp": "2026-07-12T14:50:55.538898",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T16:40:59.761395",
+      "timestamp": "2026-07-12T14:50:55.560970",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T16:40:59.794680",
+      "timestamp": "2026-07-12T15:03:25.807488",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T16:41:20.428959",
+      "timestamp": "2026-07-12T15:03:25.826402",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T16:41:20.445870",
+      "timestamp": "2026-07-12T15:50:48.760587",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T16:41:44.882551",
+      "timestamp": "2026-07-12T15:50:48.800027",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T16:41:44.911837",
+      "timestamp": "2026-07-12T16:01:37.404752",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T17:00:45.074177",
+      "timestamp": "2026-07-12T16:01:37.442749",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T17:00:45.101273",
+      "timestamp": "2026-07-12T16:07:53.998805",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T17:10:16.600547",
-      "success": false,
-      "response_time": 30.486947059631348,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T17:21:30.792564",
-      "success": false,
-      "response_time": 31.044978380203247,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T17:21:51.475040",
-      "success": true,
-      "response_time": 19.68588900566101,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T17:21:55.674434",
-      "success": true,
-      "response_time": 4.021773815155029,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T17:40:45.869517",
+      "timestamp": "2026-07-12T16:07:54.039046",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T17:40:45.913614",
+      "timestamp": "2026-07-12T16:11:16.224026",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T18:16:25.079426",
+      "timestamp": "2026-07-12T16:11:16.255357",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T18:16:25.168268",
+      "timestamp": "2026-07-12T16:20:08.495434",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T18:54:57.979613",
+      "timestamp": "2026-07-12T16:20:08.529061",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T18:54:58.018670",
+      "timestamp": "2026-07-12T17:46:57.774695",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T18:59:51.893711",
+      "timestamp": "2026-07-12T17:46:57.837070",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T18:59:51.944380",
+      "timestamp": "2026-07-12T17:50:30.345738",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T19:05:15.073142",
-      "success": false,
-      "response_time": 30.301539421081543,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T19:20:26.278347",
-      "success": false,
-      "response_time": 30.412678956985474,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T19:20:56.832671",
-      "success": false,
-      "response_time": 30.374754905700684,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T19:35:35.017397",
+      "timestamp": "2026-07-12T17:50:30.409713",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T19:35:35.050789",
+      "timestamp": "2026-07-12T18:03:18.148812",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T19:43:55.975697",
-      "success": false,
-      "response_time": 30.30431365966797,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T19:54:03.117259",
-      "success": true,
-      "response_time": 16.49158000946045,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T19:54:18.773981",
-      "success": true,
-      "response_time": 2.5155084133148193,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T20:05:21.265664",
+      "timestamp": "2026-07-12T18:03:18.189512",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T20:05:21.310131",
+      "timestamp": "2026-07-12T18:36:19.673127",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T20:10:23.303840",
-      "success": false,
-      "response_time": 30.463161945343018,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T20:13:11.756738",
-      "success": false,
-      "response_time": 30.35123038291931,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T20:13:42.272133",
-      "success": false,
-      "response_time": 30.409558057785034,
-      "model": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "tier": "medium"
-    },
-    {
-      "timestamp": "2026-07-11T20:27:26.907303",
+      "timestamp": "2026-07-12T18:36:19.732299",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     },
     {
-      "timestamp": "2026-07-11T20:27:26.940755",
+      "timestamp": "2026-07-12T18:42:03.246431",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-12T18:42:03.281846",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-12T18:45:52.423520",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-12T18:45:52.459526",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-12T19:13:27.374455",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-12T19:13:27.429557",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-12T19:21:38.526259",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-12T19:21:38.573012",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-18T03:44:52.923052",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-18T03:44:52.970027",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-18T03:51:04.907382",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-18T03:51:04.964862",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-18T03:51:59.381371",
+      "success": true,
+      "response_time": 5.0,
+      "model": "test-model",
+      "tier": "fast"
+    },
+    {
+      "timestamp": "2026-07-18T03:51:59.436211",
       "success": true,
       "response_time": 5.0,
       "model": "test-model",
       "tier": "fast"
     }
   ],
-  "last_update": "2026-07-11T20:27:26.940755"
+  "last_update": "2026-07-18T03:51:59.439215"
 }

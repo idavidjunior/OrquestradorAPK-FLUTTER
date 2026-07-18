@@ -1,8 +1,8 @@
 {
   "meta/llama-3.1-70b-instruct": {
-    "avg_time": 0,
-    "success_rate": 0,
-    "attempts": 0
+    "avg_time": 30.29329784711202,
+    "success_rate": 0.0,
+    "attempts": 3
   },
   "bytedance/seed-oss-36b-instruct": {
     "avg_time": 0,
@@ -15,9 +15,9 @@
     "attempts": 0
   },
   "abacusai/dracarys-llama-3.1-70b-instruct": {
-    "avg_time": 30.461018085479736,
+    "avg_time": 30.28619943965565,
     "success_rate": 0.0,
-    "attempts": 9
+    "attempts": 33
   },
   "mistralai/mixtral-8x7b-instruct": {
     "avg_time": 0,

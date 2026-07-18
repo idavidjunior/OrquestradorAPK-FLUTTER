@@ -11,7 +11,7 @@ class AdaptiveTimeoutManager:
         self.config_path = config_path
         self.history = deque(maxlen=50)
         self.current_timeout = 90
-        self.min_timeout = 30
+        self.min_timeout = 60
         self.max_timeout = 300
         self.load_config()
 

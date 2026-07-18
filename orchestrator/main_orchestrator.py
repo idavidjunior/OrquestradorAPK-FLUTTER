@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import os
 import subprocess
 import time
 import json
@@ -201,8 +202,12 @@ class FlutterOrchestrator:
             self._log("[FIX] Aplicando correcao Kotlin forcada...")
             kts = self.project_path / "android" / "app" / "build.gradle.kts"
             if kts.exists():
+                backup_kts = kts.with_suffix(".gradle.kts.bak")
+                import shutil
+                shutil.copy2(str(kts), str(backup_kts))
+                self._log(f"[FIX] build.gradle.kts copiado para {backup_kts.name}")
                 kts.unlink()
-                self._log("[FIX] build.gradle.kts removido")
+                self._log("[FIX] build.gradle.kts removido (backup criado)")
             gradle = self.project_path / "android" / "app" / "build.gradle"
             with open(gradle, 'w', encoding='utf-8') as f:
                 f.write('''android {
@@ -391,6 +396,18 @@ IMPORTANTE: Sua resposta ser[aá] validada automaticamente. Se n[aã]o for c[oó
             self._log(f"[IA-FALLBACK] Erro: {e}")
             return None
 
+
+    async def _apply_ia_fix(self, solution: str) -> bool:
+        self._log(f"[FIX] Aplicando solucao IA: {solution[:100]}...")
+        try:
+            result = subprocess.run(
+                ["flutter", "pub", "get"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=60
+            )
+            return result.returncode == 0
+        except Exception as e:
+            self._log(f"[FIX] Erro ao aplicar solucao: {e}")
+            return False
 
     async def _apply_fix(self, fix: str):
         target_file = self.project_path / 'lib' / 'main.dart'

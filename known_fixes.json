@@ -2,8 +2,8 @@
   "_meta": {
     "version": "2.0",
     "description": "Cérebro do OrquestradorAPK — erros conhecidos e suas correções. Cresce automaticamente a cada novo erro resolvido.",
-    "total_fixes_applied": 4,
-    "last_updated": "2026-07-11"
+    "total_fixes_applied": 103,
+    "last_updated": "2026-07-12"
   },
   "fixes": [
     {
@@ -1158,7 +1158,7 @@
         }
       ],
       "explanation": "Todo aplicativo Dart precisa de uma função main() como entry point. O orquestrador adiciona automaticamente main() com runApp().",
-      "times_applied": 0,
+      "times_applied": 2,
       "source": "manual"
     },
     {
@@ -1442,7 +1442,7 @@
         }
       ],
       "explanation": "Aplica todas as correções estruturais conhecidas em sequência: imports, main(), construtor, override, build(), MaterialApp, brackets, semicolons e reordenação.",
-      "times_applied": 0,
+      "times_applied": 1,
       "source": "manual"
     },
     {
@@ -1479,7 +1479,7 @@
       },
       "insert_strategy": "inject_after_main",
       "explanation": "Quando um StatefulWidget é necessário, o orquestrador injeta o boilerplate completo com createState() e build().",
-      "times_applied": 0,
+      "times_applied": 5,
       "source": "manual"
     },
     {
@@ -1498,7 +1498,7 @@
         }
       ],
       "explanation": "O orquestrador analisa quais widgets/classes são usados no código e adiciona automaticamente os imports necessários (material, cupertino, http, provider, etc.).",
-      "times_applied": 0,
+      "times_applied": 1,
       "source": "manual"
     },
     {
@@ -1661,6 +1661,253 @@
       "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
       "times_applied": 0,
       "source": "failed_attempt"
+    },
+    {
+      "id": "failed_f780b48a",
+      "description": "Falha não resolvida: \nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Loc...",
+      "error_patterns": [
+        "\nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Local\\Temp\\flutter_build_nmjlv0gw\\app\\android\\app\\build.gradle' line: 2\n\n* What went wrong:\nAn exceptio"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
+    },
+    {
+      "id": "failed_7fae20e3",
+      "description": "Falha não resolvida: ClientException with SocketException: Failed host lookup: 'pub.dev' (OS Error: Este host nÃ£o Ã© con...",
+      "error_patterns": [
+        "ClientException with SocketException: Failed host lookup: 'pub.dev' (OS Error: Este host nÃ£o Ã© conhecido, errno = 11001), uri=https://pub.dev/api/packages/shared_preferences_android/advisories\nFaile"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
+    },
+    {
+      "id": "failed_0a7351c9",
+      "description": "Falha não resolvida: \nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Loc...",
+      "error_patterns": [
+        "\nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Local\\Temp\\flutter_build_11t3k4vc\\app\\android\\app\\build.gradle.kts' line: 1\n\n* What went wrong:\nAn exce"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
+    },
+    {
+      "id": "failed_08131d9c",
+      "description": "Falha não resolvida: \nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Loc...",
+      "error_patterns": [
+        "\nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Local\\Temp\\flutter_build_nl8jv59m\\app\\android\\app\\build.gradle.kts' line: 1\n\n* What went wrong:\nAn exce"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
+    },
+    {
+      "id": "failed_4e22e24f",
+      "description": "Falha não resolvida: \nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Loc...",
+      "error_patterns": [
+        "\nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Local\\Temp\\flutter_build_hj61qf5y\\app\\android\\app\\build.gradle.kts' line: 1\n\n* What went wrong:\nAn exce"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
+    },
+    {
+      "id": "failed_f4c8533e",
+      "description": "Falha não resolvida: \nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Loc...",
+      "error_patterns": [
+        "\nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Local\\Temp\\flutter_build_z397n0qd\\app\\android\\app\\build.gradle.kts' line: 1\n\n* What went wrong:\nAn exce"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
+    },
+    {
+      "id": "failed_d29531cf",
+      "description": "Falha não resolvida: \nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Loc...",
+      "error_patterns": [
+        "\nFAILURE: Build failed with an exception.\n\n* Where:\nBuild file 'C:\\Users\\Playtec-bancada\\AppData\\Local\\Temp\\flutter_build_kge1x4lc\\app\\android\\app\\build.gradle.kts' line: 1\n\n* What went wrong:\nAn exce"
+      ],
+      "context_patterns": [],
+      "type": "info_only",
+      "fix_hint": "IA não conseguiu corrigir automaticamente. Revisar manualmente o código para este padrão de erro.",
+      "times_applied": 0,
+      "source": "failed_attempt"
+    },
+    {
+      "id": "learned_c3720275",
+      "description": "Aprendido: pre-build AI scan...",
+      "error_patterns": [
+        "pre-build AI scan"
+      ],
+      "context_patterns": [],
+      "type": "regex_replace",
+      "operations": [],
+      "fix_hint": "  Widget build(BuildContext context) {\n  Future<void> _initAudio() async {\n    _audioPlayer.positionStream.listen((pos) { if (mounted) setState(() => _position = pos); });\n    _audioPlayer.durationStr",
+      "explanation": "Correção aprendida automaticamente após sucesso da IA.",
+      "times_applied": 1,
+      "source": "NVIDIA"
+    },
+    {
+      "id": "apksigner_sign_timeout",
+      "description": "apksigner precisa de mais de 30s para assinar APK release — aumentar timeout para 120s",
+      "error_patterns": [
+        "apksigner",
+        "timed out after 30 seconds",
+        "Falha ao assinar APK: Command"
+      ],
+      "context_patterns": [
+        "apksigner.bat",
+        "assembleRelease"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "explanation": "O apksigner pode levar mais de 30s para assinar APKs grandes (especialmente em release). O timeout deve ser aumentado para 120s (ou mais) em _sign_apk().",
+      "fix_hint": "Aumentar timeout do subprocess.run([apksigner, ...], timeout=120) em flutter_orchestrator.py:_sign_apk()",
+      "times_applied": 1,
+      "source": "manual"
+    },
+    {
+      "id": "adb_install_timeout",
+      "description": "adb install precisa de mais de 10s — aumentar timeout para 120s",
+      "error_patterns": [
+        "adb.exe",
+        "timed out after 10 seconds",
+        "adb.*install"
+      ],
+      "context_patterns": [
+        "_adb_cmd",
+        "install.*-r"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "explanation": "A instalação via ADB pode demorar mais de 10s em dispositivos lentos ou APKs grandes. O timeout deve ser aumentado para 120s especificamente nas chamadas de install.",
+      "fix_hint": "Usar timeout=120 em _adb_cmd() para comandos de install em gui/app.py._install_via_adb() e _install_apk_manual()",
+      "times_applied": 1,
+      "source": "manual"
+    },
+    {
+      "id": "unsigned_apk_no_certificates",
+      "description": "INSTALL_PARSE_FAILED_NO_CERTIFICATES — APK nao assinado ou assinatura V1 apenas",
+      "error_patterns": [
+        "INSTALL_PARSE_FAILED_NO_CERTIFICATES",
+        "Failed to collect certificates",
+        "get length of null array"
+      ],
+      "context_patterns": [
+        "install.*apk",
+        "adb.*install"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "explanation": "APKs para API 30+ precisam ser assinados com esquema V2+ (nao apenas V1/jarsigner). Usar apksigner do Android SDK build-tools, que faz V1+V2+V3 + alinhamento automatico. jarsigner (V1-only) causa INSTALL_PARSE_FAILED_NO_CERTIFICATES.",
+      "fix_hint": "Usar apksigner (SDK build-tools) em vez de jarsigner. Em Windows, apksigner termina em .bat. Se apksigner nao estiver disponivel, zipalign + jarsigner com SHA256.",
+      "times_applied": 1,
+      "source": "manual"
+    },
+    {
+      "id": "copy_artifacts_skip_unsigned",
+      "description": "copy_artifacts deve ignorar APKs unsigned (-unsigned) e preferir os assinados",
+      "error_patterns": [
+        "app-release-unsigned.apk"
+      ],
+      "context_patterns": [
+        "copy_artifacts",
+        "build_output"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "explanation": "Quando a assinatura falha, o APK unsigned (app-release-unsigned.apk) ainda era copiado para build_output/ e instalado. copy_artifacts() deve filtrar APKs com '-unsigned' no nome, selecionando apenas os assinados.",
+      "fix_hint": "Em flutter_orchestrator.py:copy_artifacts(), adicionar filtro: signed = [p for p in candidates if '-unsigned' not in p.name.lower()]",
+      "times_applied": 1,
+      "source": "manual"
+    },
+    {
+      "id": "apksigner_windows_bat_extension",
+      "description": "No Windows, apksigner do SDK build-tools termina em .bat, nao .exe",
+      "error_patterns": [
+        "apksigner",
+        "not found"
+      ],
+      "context_patterns": [
+        "_find_sdk_tool",
+        "ANDROID_HOME",
+        "build-tools"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "explanation": "No Windows, o executavel do apksigner nos build-tools do Android SDK e 'apksigner.bat', nao 'apksigner.exe'. _find_sdk_tool() precisa tentar ambas as extensoes (.exe, .bat, e sem extensao) para localizar a ferramenta correta.",
+      "fix_hint": "_find_sdk_tool() ja tenta .exe, .bat e nome puro. Verificar se o path do ANDROID_HOME/build-tools/<versao>/ esta correto.",
+      "times_applied": 1,
+      "source": "manual"
+    },
+    {
+      "id": "apksigner_sdk_build_tools_path",
+      "description": "apksigner fica em ANDROID_HOME/build-tools/<versao>/apksigner(.bat)",
+      "error_patterns": [
+        "apksigner",
+        "Command.*not found"
+      ],
+      "context_patterns": [
+        "ANDROID_HOME",
+        "SDK",
+        "build-tools"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "explanation": "O apksigner nao esta no PATH do sistema, ele fica dentro do Android SDK em build-tools/<versao>/. O path tipico e: C:\\Users\\<user>\\AppData\\Local\\Android\\Sdk\\build-tools\\<versao>\\apksigner.bat. _find_sdk_tool() ja faz essa busca automaticamente.",
+      "fix_hint": "Verificar se ANDROID_HOME esta configurado e se build-tools/ existe. _find_sdk_tool() faz a busca automaticamente.",
+      "times_applied": 1,
+      "source": "manual"
+    },
+    {
+      "id": "debug_keystore_generation",
+      "description": "Debug keystore nao encontrado — gerar automaticamente com keytool",
+      "error_patterns": [
+        "debug.keystore",
+        "Debug keystore nao encontrado",
+        "jarsigner.*androiddebugkey"
+      ],
+      "context_patterns": [
+        ".android",
+        "debug.keystore"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "explanation": "Quando o debug.keystore padrao do Android nao existe em ~/.android/, o orquestrador pode gerar um automaticamente com keytool -genkey. O alias padrao e 'androiddebugkey' com senha 'android'.",
+      "fix_hint": "_sign_apk() ja gera o debug keystore automaticamente se nao existir. Verificar se keytool esta disponivel no PATH (parte do JDK).",
+      "times_applied": 1,
+      "source": "manual"
+    },
+    {
+      "id": "apk_output_versioned_archive",
+      "description": "APK copiado com nome versionado {projeto}_v{versao}.apk + archive das 2 versoes anteriores",
+      "error_patterns": [
+        "build_output",
+        "app_.*\\.apk"
+      ],
+      "context_patterns": [
+        "copy_artifacts",
+        "output_dir"
+      ],
+      "type": "info_only",
+      "operations": [],
+      "explanation": "O copy_artifacts() agora nomeia o APK como {nome_do_projeto}_v{versao}.apk extraindo o nome do settings.gradle/pubspec.yaml e a versao do build.gradle. Quando o mesmo APK e gerado novamente, o anterior vai para archive/ e apenas as 2 versoes mais recentes sao mantidas.",
+      "fix_hint": "Usar _get_project_name() + _get_app_version() + archive com limite de 2 versoes antigas em flutter_orchestrator.py.",
+      "times_applied": 1,
+      "source": "manual"
     }
   ],
   "package_versions": {
